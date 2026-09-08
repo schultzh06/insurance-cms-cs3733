@@ -38,12 +38,17 @@ function AddEmployee() {
     const [email, setEmail] = React.useState("")
     const [id, setID] = React.useState("")
     const [submitResult, setSubmitResult] = useState<"success" | "error" | null>(null)
+    const [passwordError, setPasswordError] = useState<string | null>(null)
     const { getAccessTokenSilently } = useAuth0();
 
     const handleSubmit = async () => {
-        {/*TODO: This forces the user to enter all the fields, should probably do this on backend later */}
+        setPasswordError(null)
         if (!firstName || !lastName || !id || !userName || !password || targetPersona === "Select job position") {
             setSubmitResult("error")
+            return
+        }
+        if (password.length < 8) {
+            setPasswordError("Password must be at least 8 characters.")
             return
         }
             try {
@@ -205,11 +210,12 @@ function AddEmployee() {
                                 <FieldLabel className="text-primary" htmlFor="input-field-password">Password</FieldLabel>
                                 <Input
                                     value={password}
-                                    onChange={(e) => setPassword(e.target.value)}
-                                    id="input-field-last-name"
-                                    type="text"
+                                    onChange={(e) => { setPassword(e.target.value); setPasswordError(null); }}
+                                    id="input-field-password"
+                                    type="password"
                                     placeholder="Enter user password"
                                 />
+                                {passwordError && <FieldDescription className="text-destructive">{passwordError}</FieldDescription>}
                             </Field>
 
                             <Field className="bg-background flex-1">

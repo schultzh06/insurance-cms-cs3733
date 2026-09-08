@@ -51,7 +51,7 @@ model Content {
   tags                 String[]
   deleted              Boolean                     @default(false)
   textContent          String?
-  searchVector         Unsupported("tsvector")?    @default(dbgenerated("to_tsvector('english'::regconfig, COALESCE(\"textContent\", ''::text))"))
+  searchVector         Unsupported("tsvector")?
   embedding            Unsupported("vector(384)")?
   serviceRequestId     Int?                        @unique
   bookmarks            Bookmark[]

@@ -58,6 +58,7 @@ export function getErrors(
     if (!values.username.trim()) e.username = "Username is required.";
     if (!values.email.trim()) e.email = "Email is required.";
     if (!values.password) e.password = "Password is required.";
+    else if (values.password.length < 8) e.password = "Password must be at least 8 characters.";
     if (!values.confirmPassword) e.confirmPassword = "Please confirm your password.";
     else if (values.password !== values.confirmPassword) e.confirmPassword = "Passwords do not match.";
     return e;

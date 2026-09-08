@@ -5,6 +5,12 @@ server {
     root /usr/share/nginx/html;
     index index.html;
 
+    # config.js is generated at startup — never cache it
+    location = /config.js {
+        add_header Cache-Control "no-store";
+        try_files $uri =404;
+    }
+
     # Serve static assets directly with caching
     location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
         expires 1y;
@@ -14,7 +20,8 @@ server {
 
     # Proxy API calls to the backend container
     location /api/ {
-        proxy_pass ${API_URL}/;
+        client_max_body_size 50m;
+        proxy_pass ${API_URL}/api/;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;

@@ -29,6 +29,6 @@ done
 
 echo "==> Deploying on $REMOTE_HOST..."
 
-ssh "$REMOTE_HOST" "cd $REMOTE_DIR && sudo docker compose pull && sudo docker compose up -d --force-recreate"
+ssh "$REMOTE_HOST" "cd $REMOTE_DIR && sudo docker compose pull --quiet && sudo docker compose up -d --force-recreate"
 
 echo "==> Done."
