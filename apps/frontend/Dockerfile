@@ -15,6 +15,8 @@ RUN pnpm --filter frontend build
 FROM nginx:stable-alpine AS runner
 
 COPY --from=builder /app/apps/frontend/dist /usr/share/nginx/html
+COPY apps/frontend/nginx.conf.template /etc/nginx/nginx.conf.template
+COPY apps/frontend/docker-entrypoint.sh /docker-entrypoint.sh
 
 EXPOSE 80
-CMD ["nginx", "-g", "daemon off;"]
+ENTRYPOINT ["/docker-entrypoint.sh"]

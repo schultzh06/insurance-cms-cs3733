@@ -24,8 +24,8 @@ app.use(express.json());
 const upload = multer({ storage: multer.memoryStorage() });
 
 const checkJwt = auth({
-    audience: 'https://hanover-cma-api',
-    issuerBaseURL: 'https://dev-s638hh1d5ry67sv6.us.auth0.com/'
+    audience: process.env.AUTH0_AUDIENCE!,
+    issuerBaseURL: `https://${process.env.AUTH0_DOMAIN}/`
 })
 
 app.get("/api/preview", content.previewContent)
@@ -106,7 +106,8 @@ app.post("/api/nl-query", nlQuery.generateNLQuery);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-app.listen(3000, '0.0.0.0', () => {
-        console.log(`Server is listening on port 3000`);
-        console.log(`    http://localhost:3000`);
+const port = parseInt(process.env.BACKEND_PORT || '3000', 10);
+app.listen(port, '0.0.0.0', () => {
+        console.log(`Server is listening on port ${port}`);
+        console.log(`    http://localhost:${port}`);
 })

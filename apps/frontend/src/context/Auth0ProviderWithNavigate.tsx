@@ -1,15 +1,17 @@
 import { Auth0Provider } from '@auth0/auth0-react';
 import { useNavigate } from 'react-router-dom';
 
+const config = (window as any).__RUNTIME_CONFIG__ ?? {};
+
 export function Auth0ProviderWithNavigate({ children }: { children: React.ReactNode }) {
     const navigate = useNavigate();
     return (
         <Auth0Provider
-            domain="dev-s638hh1d5ry67sv6.us.auth0.com"
-            clientId="uInLEc9TqrOiGyZi4QrhhN70WFS52N3I"
+            domain={config.AUTH0_DOMAIN ?? import.meta.env.VITE_AUTH0_DOMAIN}
+            clientId={config.AUTH0_CLIENT_ID ?? import.meta.env.VITE_AUTH0_CLIENT_ID}
             authorizationParams={{
                 redirect_uri: window.location.origin,
-                audience: "https://hanover-cma-api"
+                audience: config.AUTH0_AUDIENCE ?? import.meta.env.VITE_AUTH0_AUDIENCE
             }}
             onRedirectCallback={(appState) => {
                 navigate(appState?.returnTo || '/employeehome');
