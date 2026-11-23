@@ -6,7 +6,10 @@
 		"dev:python": "cd apps/python && .venv/bin/uvicorn main:app --reload --port 3001",
 		"dev:all": "pnpm dev:python & pnpm dev",
 		"build": "turbo run build",
-		"start": "turbo run start"
+		"start": "turbo run start",
+		"seed": "pnpm --filter backend seed",
+		"backfill": "pnpm --filter backend backfill",
+		"backfill:text": "pnpm --filter backend backfill:text"
 	},
 	"packageManager": "pnpm@10.33.0+sha512.10568bb4a6afb58c9eb3630da90cc9516417abebd3fabbe6739f0ae795728da1491e9db5a544c76ad8eb7570f5c4bb3d6c637b2cb41bfdcdb47fa823c8649319",
 	"devDependencies": {
