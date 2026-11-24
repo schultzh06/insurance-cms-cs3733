@@ -1,12 +1,17 @@
 /**
  * Wipes the demo environment and rebuilds it from the fixtures in `seed-data/`.
- * Destructive: truncates every app table, empties the storage buckets, and
- * deletes every user in the Auth0 tenant (the demo tenant has no real accounts).
+ * Destructive: truncates every app table and empties the storage buckets.
+ * The Auth0 tenant is synced rather than wiped: fixture users that already
+ * exist are kept, missing ones are created, and any other user is deleted
+ * (the demo tenant has no real accounts). This keeps re-runs cheap on the
+ * rate-limited Management API.
  *
  * Usage:
- *   pnpm seed --yes
+ *   pnpm seed --yes [--reset-passwords]
  *
- * --yes  Required. Without it the script only prints what it would target.
+ * --yes              Required. Without it the script only prints what it would target.
+ * --reset-passwords  Also set every kept user's password to SEED_DEMO_PASSWORD
+ *                    (needed after changing it; costs one API call per user).
  */
 import { config } from 'dotenv';
 import { resolve, dirname } from 'path';
@@ -21,7 +26,7 @@ config({ path: resolve(__dirname, '../.env') });
 
 // Dynamic imports so dotenv runs before Prisma, the R2 client and the Auth0 client initialise.
 const { prisma, Bucket } = await import('@softeng-app/db');
-const { createSeedAuth0User, deleteAllAuth0Users } = await import('../src/helpers/auth0Management.js');
+const { syncSeedAuth0Users } = await import('../src/helpers/auth0Management.js');
 const { employees } = await import('./seed-data/employees.js');
 
 const TEAM_PHOTOS_DIR = resolve(__dirname, '../../frontend/src/assets/Team Photos');
@@ -40,7 +45,7 @@ const TABLES = [
 
 function preflight(): string {
     const required = [
-        'DATABASE_URL', 'SUPABASE_URL', 'SUPABASE_SECRET_KEY',
+        'DATABASE_URL', 'R2_ACCOUNT_ID', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY',
         'AUTH0_DOMAIN', 'AUTH0_MGMT_CLIENT_ID', 'AUTH0_MGMT_CLIENT_SECRET',
         'SEED_DEMO_PASSWORD',
     ];
@@ -57,7 +62,7 @@ function preflight(): string {
     console.log(`Target database: ${dbHost}`);
     console.log(`Target Auth0:    ${process.env.AUTH0_DOMAIN}`);
     if (!process.argv.includes('--yes')) {
-        console.log('\nThis wipes all data, storage and ALL Auth0 users. Re-run with --yes to proceed.');
+        console.log('\nThis wipes all data and storage, and deletes every Auth0 user not in the fixtures. Re-run with --yes to proceed.');
         process.exit(0);
     }
     return process.env.SEED_DEMO_PASSWORD!;
@@ -81,18 +86,26 @@ async function resetStorage() {
     }
 }
 
-async function resetAuth0() {
-    const deleted = await deleteAllAuth0Users();
-    console.log(`[reset] deleted ${deleted} Auth0 users (entire tenant)`);
+/** Fixture login email for an employee; also the key Auth0 users are matched on. */
+const seedEmail = (username: string) => `${username}@example.com`;
+
+/** Syncs the Auth0 tenant onto the fixture users and returns their ids keyed by email. */
+async function syncAuth0(password: string): Promise<Map<string, string>> {
+    const resetPasswords = process.argv.includes('--reset-passwords');
+    const wanted = employees.map(e => ({ username: e.username, email: seedEmail(e.username) }));
+    const r = await syncSeedAuth0Users(wanted, password, resetPasswords);
+    console.log(`[auth0] kept ${r.kept}, created ${r.created}, deleted ${r.deleted} strays` +
+        (resetPasswords ? `, reset ${r.passwordsReset} passwords` : ''));
+    return r.ids;
 }
 
 // ---------------------------------------------------------------------------
 // 5. Employees
 // ---------------------------------------------------------------------------
 
-async function seedEmployees(password: string) {
+async function seedEmployees(auth0Ids: Map<string, string>) {
     for (const e of employees) {
-        const auth0Id = await createSeedAuth0User(e.username, password, `${e.username}@example.com`);
+        const auth0Id = auth0Ids.get(seedEmail(e.username).toLowerCase())!;
         await prisma.employee.create({
             data: { id: e.id, firstName: e.firstName, lastName: e.lastName, persona: e.persona, auth0Id },
         });
@@ -132,8 +145,8 @@ async function main() {
     const password = preflight();
     await resetDatabase();
     await resetStorage();
-    await resetAuth0();
-    await seedEmployees(password);
+    const auth0Ids = await syncAuth0(password);
+    await seedEmployees(auth0Ids);
     runScript('backfill-text.ts');
     runScript('backfill.ts');
     console.log('\nSeed complete.');
