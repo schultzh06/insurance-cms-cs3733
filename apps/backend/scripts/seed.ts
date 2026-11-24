@@ -28,6 +28,12 @@ config({ path: resolve(__dirname, '../.env') });
 const { prisma, Bucket } = await import('@softeng-app/db');
 const { syncSeedAuth0Users } = await import('../src/helpers/auth0Management.js');
 const { employees } = await import('./seed-data/employees.js');
+const { files } = await import('./seed-data/files.js');
+const { links } = await import('./seed-data/links.js');
+const { applyExpirationTagsToAll } = await import('../src/jobs/autoTag.js');
+const { readdir } = await import('fs/promises');
+
+const FILES_DIR = resolve(__dirname, 'seed-data/files');
 
 const TEAM_PHOTOS_DIR = resolve(__dirname, '../../frontend/src/assets/Team Photos');
 const BUCKETS = ['content', 'profiles'] as const;
@@ -126,6 +132,86 @@ async function seedEmployees(auth0Ids: Map<string, string>) {
 }
 
 // ---------------------------------------------------------------------------
+// 6. Content (files + links)
+// ---------------------------------------------------------------------------
+
+/**
+ * Fails before anything is uploaded if `files.ts` and `seed-data/files/` disagree,
+ * so a renamed or newly built file can't silently go unseeded.
+ */
+async function checkFileManifest() {
+    const onDisk = new Set(await readdir(FILES_DIR));
+    const listed = new Set(files.map(f => f.file));
+    const missing = [...listed].filter(f => !onDisk.has(f));
+    const unlisted = [...onDisk].filter(f => !listed.has(f));
+    if (missing.length || unlisted.length) {
+        throw new Error(
+            `seed-data/files.ts is out of sync with seed-data/files/` +
+            (missing.length ? `\n  listed but not on disk (run build-content.sh?): ${missing.join(', ')}` : '') +
+            (unlisted.length ? `\n  on disk but not listed: ${unlisted.join(', ')}` : ''),
+        );
+    }
+}
+
+/**
+ * Uploads every fixture file to R2 and inserts file and link content rows.
+ * Text extraction and embeddings are left null on purpose: stage 8 runs the
+ * existing backfill scripts, which pick up exactly those null rows.
+ */
+async function seedContent() {
+    await checkFileManifest();
+    const employeeIds = new Map(employees.map(e => [e.key, e.id]));
+    // Links have no owner in their fixture; give each to the first employee of its persona.
+    const personaOwner = new Map<string, number>();
+    for (const e of employees) if (!personaOwner.has(e.persona)) personaOwner.set(e.persona, e.id);
+    const now = new Date();
+    const DAY_MS = 24 * 60 * 60 * 1000;
+
+    for (const f of files) {
+        const ownerId = employeeIds.get(f.owner);
+        if (ownerId === undefined) throw new Error(`files.ts: unknown owner "${f.owner}" for ${f.file}`);
+        // Same `<ownerId>/<uuid>/<filename>` key scheme as buildFileURI in hooks/content.ts.
+        const { path } = await Bucket.uploadFile(await readFile(resolve(FILES_DIR, f.file)), `${ownerId}/${randomUUID()}/${f.file}`);
+        await prisma.content.create({
+            data: {
+                displayName: f.displayName,
+                fileURI: path,
+                ownerId,
+                contentType: f.contentType,
+                status: f.status,
+                targetPersona: f.targetPersona,
+                tags: f.tags,
+                created: now,
+                lastModified: now,
+                expiration: f.expiresInDays === undefined ? null : new Date(now.getTime() + f.expiresInDays * DAY_MS),
+            },
+        });
+    }
+    console.log(`[content] uploaded ${files.length} files`);
+
+    for (const l of links) {
+        await prisma.content.create({
+            data: {
+                displayName: l.displayName,
+                linkURL: l.url,
+                ownerId: personaOwner.get(l.targetPersona) ?? null,
+                contentType: 'reference',
+                status: 'complete',
+                targetPersona: l.targetPersona,
+                tags: l.tags,
+                created: now,
+                lastModified: now,
+            },
+        });
+    }
+    console.log(`[content] created ${links.length} links`);
+
+    // Same job the server runs nightly, so expiry tags show immediately after a seed.
+    await applyExpirationTagsToAll();
+    console.log('[content] applied expiration tags');
+}
+
+// ---------------------------------------------------------------------------
 // 8. Backfill text + embeddings
 // ---------------------------------------------------------------------------
 
@@ -147,6 +233,7 @@ async function main() {
     await resetStorage();
     const auth0Ids = await syncAuth0(password);
     await seedEmployees(auth0Ids);
+    await seedContent();
     runScript('backfill-text.ts');
     runScript('backfill.ts');
     console.log('\nSeed complete.');
