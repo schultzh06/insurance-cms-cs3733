@@ -4,7 +4,9 @@ yarn.lock
 __pycache__/
 .claude
 .mcp.json
-.env
+# Any env file (.env, .env.prod, .env.local, ...) at any depth, except the committed template
+.env*
+!.env.example
 .turbo/
 .idea/
 pnpm-lock.yaml

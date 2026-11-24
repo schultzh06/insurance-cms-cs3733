@@ -27,7 +27,7 @@ HOST="elitedesk-2"              # must match the host whose compose_stacks lists
 STACK="softeng-demo"            # stack dir: /opt/compose/$STACK on $HOST
 SERVICES=()                     # compose services to recreate; empty = the whole stack
 VERSION_FROM=""                 # "" | pyproject | package.json
-ENV_FILE="apps/backend/.env.prod"  # gitignored; copied to /opt/compose/$STACK/.env (:latest mode)
+ENV_FILE=".env.prod"            # gitignored + dockerignored; copied to /opt/compose/$STACK/.env (:latest mode)
 # ------------------------------------------------------------------------------------------
 
 cd "$(dirname "$0")"

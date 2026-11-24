@@ -1,5 +1,30 @@
-node_modules
+# Docker matches these from the build-context root, so a bare name (e.g. "node_modules")
+# only excludes the top-level entry. "**/" matches zero or more directories, so each
+# "**/name" pattern below excludes that name at any depth. The Dockerfiles run their own
+# `pnpm install` / build steps, so none of these host-side artifacts are needed.
+
+# Dependencies and build output
+**/node_modules
+**/dist
+**/build
+**/.turbo
+**/.venv
+**/__pycache__
+
+# Env files at any depth: ".env*" covers .env, .env.prod, .env.local, etc. A bare ".env"
+# used to let apps/backend/.env into the published backend image.
+**/.env*
+# ...except the committed template, which holds no secrets.
+!**/.env.example
+
+# Local tooling and editor state (Claude worktrees alone are gigabytes)
 .git
-dist
-build
-.env
+.claude
+.mcp.json
+**/.idea
+**/.DS_Store
+
+# Private notes that are gitignored but would still be copied from a working checkout
+CLAUDE.md
+collections-plan.md
+relaunch-plan.md
