@@ -6,7 +6,7 @@ Content management and analytics platform built for The Hanover Insurance Group
 
 ## About this fork
 
-**Fork Author:** Hayden Schultz (schultzh06) 
+**Fork Author:** Hayden Schultz (schultzh06)
 
 This is a fork of a team repository. The full codebase is preserved here for
 context; the work below is mine.
@@ -52,7 +52,7 @@ widgets. Dashboard graphs.
 
 **Frontend foundation:** shadcn/ui and Tailwind setup, navigation bar, sidebar
 and avatar user dropdown, home page and hero, about page, settings page, and
-site themes. 
+site themes.
 
 **Styling:** ongoing restyling across every iteration for consistency with the
 team style guide: color palette revisions and component design passes.
@@ -95,7 +95,7 @@ Backend-only: `pnpm run --filter backend dev`. Migrations: `cd packages/db && pn
 
 ### Environment variables (`.env` at repo root)
 
-```
+```text
 DATABASE_URL=                   # Postgres connection string (Prisma)
 NEXT_PUBLIC_DATABASE_URL=       # Same value, exposed for frontend tooling (codebase quirk — not a Next.js project)
 SUPABASE_URL=

@@ -1,0 +1,10 @@
+# rumdl (Markdown linter) config. A project config replaces the user-level one
+# rather than merging with it, so the house style is restated here.
+
+[global]
+# One line per paragraph is the house style; hard-wrapping isn't wanted.
+disable = ["MD013"]
+
+# README screenshots use <img width="..."> because Markdown image syntax can't size images.
+[MD033]
+allowed-elements = ["img"]
