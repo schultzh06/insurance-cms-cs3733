@@ -19,13 +19,13 @@ import { spawnSync } from 'child_process';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 config({ path: resolve(__dirname, '../.env') });
 
-// Dynamic imports so dotenv runs before Prisma, Supabase and the Auth0 client initialise.
-const { prisma, supabase, Bucket } = await import('@softeng-app/db');
+// Dynamic imports so dotenv runs before Prisma, the R2 client and the Auth0 client initialise.
+const { prisma, Bucket } = await import('@softeng-app/db');
 const { createSeedAuth0User, deleteAllAuth0Users } = await import('../src/helpers/auth0Management.js');
 const { employees } = await import('./seed-data/employees.js');
 
 const TEAM_PHOTOS_DIR = resolve(__dirname, '../../frontend/src/assets/Team Photos');
-const BUCKETS = ['content', 'profiles'];
+const BUCKETS = ['content', 'profiles'] as const;
 
 /** Every app table; TRUNCATE ... CASCADE handles foreign-key order. */
 const TABLES = [
@@ -74,29 +74,10 @@ async function resetDatabase() {
     console.log(`[reset] truncated ${TABLES.length} tables`);
 }
 
-/** Recursively lists every file path under `prefix`; Supabase lists one level at a time. */
-async function listAllFiles(bucket: string, prefix = ''): Promise<string[]> {
-    const paths: string[] = [];
-    const { data, error } = await supabase.storage.from(bucket).list(prefix, { limit: 1000 });
-    if (error) throw error;
-    for (const entry of data ?? []) {
-        const path = prefix ? `${prefix}/${entry.name}` : entry.name;
-        // Folders come back without an id.
-        if (entry.id === null) paths.push(...await listAllFiles(bucket, path));
-        else paths.push(path);
-    }
-    return paths;
-}
-
 async function resetStorage() {
     for (const bucket of BUCKETS) {
-        const paths = await listAllFiles(bucket);
-        // remove() accepts many paths per call; batch to keep requests small.
-        for (let i = 0; i < paths.length; i += 100) {
-            const { error } = await supabase.storage.from(bucket).remove(paths.slice(i, i + 100));
-            if (error) throw error;
-        }
-        console.log(`[reset] removed ${paths.length} files from "${bucket}"`);
+        const removed = await Bucket.emptyBucket(bucket);
+        console.log(`[reset] removed ${removed} files from "${bucket}"`);
     }
 }
 

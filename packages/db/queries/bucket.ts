@@ -1,7 +1,9 @@
 import {
     DeleteObjectCommand,
+    DeleteObjectsCommand,
     GetObjectCommand,
     HeadObjectCommand,
+    ListObjectsV2Command,
     NotFound,
     PutObjectCommand,
 } from "@aws-sdk/client-s3";
@@ -78,6 +80,29 @@ export class Bucket {
             if (error instanceof NotFound) return null;
             throw error;
         }
+    }
+
+    /**
+     * Deletes every object in a bucket and returns how many were removed.
+     * Destructive — used only by the demo seed script. R2 has no folders, so a
+     * flat paginated listing finds everything; each page (max 1000 keys) is
+     * removed with one DeleteObjects call.
+     */
+    public static async emptyBucket(bucket: BucketKey): Promise<number> {
+        let removed = 0;
+        let token: string | undefined;
+        do {
+            const page = await r2.send(new ListObjectsV2Command({ Bucket: R2_BUCKETS[bucket], ContinuationToken: token }));
+            const keys = (page.Contents ?? []).map(o => ({ Key: o.Key! }));
+            if (keys.length) {
+                const res = await r2.send(new DeleteObjectsCommand({ Bucket: R2_BUCKETS[bucket], Delete: { Objects: keys, Quiet: true } }));
+                // Quiet mode only reports failures; surface them rather than silently leaving files behind
+                if (res.Errors?.length) throw new Error(`emptyBucket(${bucket}): ${res.Errors.length} deletes failed, first: ${res.Errors[0].Message}`);
+                removed += keys.length;
+            }
+            token = page.NextContinuationToken;
+        } while (token);
+        return removed;
     }
 
     /** Deletes an object. S3 semantics: deleting a missing key succeeds silently. */

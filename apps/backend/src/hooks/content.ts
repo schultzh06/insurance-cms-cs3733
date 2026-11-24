@@ -136,7 +136,7 @@ export const setContentServiceRequest = async (req: req, res: res) => {
     }
 };
 
-/** GET /api/content/:id/info — returns Supabase file metadata (size, MIME type, etc.) for the content item's attached file. */
+/** GET /api/content/:id/info — returns R2 file metadata (size, MIME type, etc.) for the content item's attached file. */
 export const getContentInfo = async (req: req, res: res) => {
     try {
         const id = parseInt(req.params.id);
@@ -191,7 +191,7 @@ export const getFileUrl = async (req: req, res: res) => {
 };
 
 /**
- * Builds the Supabase storage path for a new file upload.
+ * Builds the R2 object key for a new file upload.
  * The UUID segment prevents collisions when the same filename is uploaded more
  * than once by the same owner. Format: `<ownerID>/<uuid>/<originalFilename>`.
  */
@@ -242,7 +242,7 @@ function scheduleContentEmbedding(
  * Creates a new content item. Responds with 201 immediately after writing the
  * metadata row, then kicks off text extraction and embedding generation in
  * `setImmediate` so the client isn't blocked by potentially slow ML inference.
- * If the Supabase upload succeeds but the DB write fails, the orphaned file is
+ * If the R2 upload succeeds but the DB write fails, the orphaned file is
  * cleaned up before returning the error.
  */
 export const uploadFile = async (req: req, res: res) => {
@@ -405,7 +405,7 @@ export const updateContent = async (req: req, res: res) => {
  * Soft-deletes a content item (moves it to the recycle bin).
  * Requires the caller to hold the checkout lock — same gate as updateContent.
  * Clears the checkout lock as part of the operation.
- * The Supabase file (if any) is NOT deleted here; that happens on permanent delete.
+ * The R2 file (if any) is NOT deleted here; that happens on permanent delete.
  */
 export const deleteContent = async (req: req, res: res) => {
     try {
@@ -479,7 +479,7 @@ export const restoreContent = async (req: req, res: res) => {
 };
 
 /**
- * Permanently deletes a content item and its Supabase file.
+ * Permanently deletes a content item and its R2 file.
  * Requires the caller to be the item owner or an admin.
  * The item must already be in the recycle bin (deleted = true).
  */

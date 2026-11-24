@@ -119,7 +119,7 @@ export class Employee {
         return result;
     }
 
-    /** Updates the employee's profile photo URI (Supabase storage path). */
+    /** Updates the employee's profile photo URI (R2 object key in the profiles bucket). */
     public static async updateProfilePhotoURI(id: number, uri: string): Promise<p.Employee> {
         return prisma.employee.update({
             where: { id },
