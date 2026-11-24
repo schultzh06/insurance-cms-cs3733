@@ -222,8 +222,7 @@ export function ViewSingleContentItem() {
                                 {originalFilename && (
                                     <FilePreview
                                         filename={originalFilename}
-                                        src={`/api/content/download/${item.id}`}
-                                        infoSrc={`/api/content/info/${item.id}`}
+                                        contentId={item.id}
                                         mode="full"
                                     />
                                 )}

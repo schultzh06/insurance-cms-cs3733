@@ -16,7 +16,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 config({ path: resolve(__dirname, '../.env') });
 
 import type { SupportedMimeType } from '../lib/extractors.js';
-const { prisma, supabase } = await import('@softeng-app/db');
+const { prisma, Bucket } = await import('@softeng-app/db');
 const { extractText, getVisionTokensUsed, setVerbose } = await import('../lib/extractors.js');
 const mime = (await import('mime-types')).default;
 
@@ -35,9 +35,11 @@ async function backfill() {
             let textContent: string | null = null;
 
             if (item.fileURI) {
-                const { data, error } = await supabase.storage.from('content').download(item.fileURI);
-                if (error || !data) {
-                    console.warn(`Skipped [${item.id}] "${item.displayName}" — download failed:`, error?.message);
+                let data: Buffer;
+                try {
+                    data = await Bucket.downloadFile(item.fileURI);
+                } catch (error) {
+                    console.warn(`Skipped [${item.id}] "${item.displayName}" — download failed:`, (error as Error).message);
                     skipped++; continue;
                 }
                 const mimeType = mime.lookup(item.fileURI) || null;
@@ -45,7 +47,7 @@ async function backfill() {
                     console.warn(`Skipped [${item.id}] "${item.displayName}" — unknown MIME type`);
                     skipped++; continue;
                 }
-                textContent = await extractText(Buffer.from(await data.arrayBuffer()), mimeType as SupportedMimeType);
+                textContent = await extractText(data, mimeType as SupportedMimeType);
             } else if (item.linkURL) {
                 textContent = await extractText(null, 'url', item.linkURL);
             } else {

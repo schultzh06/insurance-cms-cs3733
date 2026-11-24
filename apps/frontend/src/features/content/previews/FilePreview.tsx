@@ -6,6 +6,7 @@ import DocViewer, { PDFRenderer, DocxRenderer, MarkdownRenderer } from "@iamjari
 import "@iamjariwala/react-doc-viewer/dist/index.css";
 import { getPreviewMode } from "@/lib/mime.ts";
 import { getCachedText, setCachedText, getCachedBlob, setCachedBlob } from "@/features/content/previews/file-cache.ts";
+import { fetchFile, getFileUrl } from "@/features/content/previews/file-url.ts";
 import { useAuth0 } from "@auth0/auth0-react"
 
 function formatBytes(bytes: number): string {
@@ -25,12 +26,9 @@ interface Props {
     /** Original filename including extension (e.g. `"report.pdf"`). Used to
      *  determine the preview mode and as the suggested download filename. */
     filename: string;
-    /** Authenticated API URL to fetch the file content, e.g.
-     *  `"/api/content/download/5"`. Also used as the cache key. */
-    src: string;
-    /** Optional API URL to fetch file metadata (currently just `size`), e.g.
-     *  `"/api/content/info/5"`. When omitted the file size is not shown. */
-    infoSrc?: string;
+    /** Content item ID. Used to resolve a presigned file URL, fetch file size
+     *  metadata, record preview hits, and as the file cache key. */
+    contentId: number;
     /** Display density. Defaults to `"inline"`. */
     mode?: DisplayMode;
 }
@@ -89,7 +87,7 @@ const DocViewerMemo = memo(function DocViewerMemo({
  * The object URL is created when the effect runs and revoked in the cleanup
  * function to avoid memory leaks.
  */
-export function FilePreview({ filename, src, infoSrc, mode = "inline" }: Props) {
+export function FilePreview({ filename, contentId, mode = "inline" }: Props) {
     // Derive the renderer once — this is pure (no async work) and drives both
     // initial state and the fetch logic below.
     const previewMode = getPreviewMode(null, filename);
@@ -117,10 +115,14 @@ export function FilePreview({ filename, src, infoSrc, mode = "inline" }: Props) 
     // is immediately revoked after the click — the browser queues the download
     // before the URL is invalidated.
     const handleDownload = async () => {
-        const token = await getAccessTokenSilently();
-        const res = await fetch(src, { headers: { Authorization: `Bearer ${token}` } });
-        if (!res.ok) return;
-        const blob = await res.blob();
+        // Reuse bytes already fetched for the preview; otherwise pull them from R2
+        let blob = getCachedBlob(contentId);
+        if (!blob) {
+            const token = await getAccessTokenSilently();
+            const res = await fetchFile(contentId, token);
+            if (!res.ok) return;
+            blob = await res.blob();
+        }
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
@@ -128,16 +130,6 @@ export function FilePreview({ filename, src, infoSrc, mode = "inline" }: Props) 
         a.click();
         URL.revokeObjectURL(url);
     };
-
-    const getPublicUrl = async (contentId: string) => {
-        const token = await getAccessTokenSilently();
-        const res = await fetch(`/api/content/publicUrl/${contentId}`, {
-            headers: { Authorization: `Bearer ${token}` },
-        });
-        if (!res.ok) return;
-        const data = await res.json();
-        setPublicUrl(data);
-    }
 
     // Main fetch effect. Runs whenever the file source, preview mode, or info
     // URL changes (i.e. when a different file is expanded).
@@ -151,15 +143,11 @@ export function FilePreview({ filename, src, infoSrc, mode = "inline" }: Props) 
             try {
                 const token = await getTokenRef.current();
 
-                //get the contentId by grabbing the end of the infoSrc url - used for microsoft and hit count
-                const contentId = infoSrc?.split("/").at(-1) ?? null;
-                if (!contentId) { return }
-
                 // Fetch file size metadata independently of the file content so
                 // the size can be shown even for "none" preview files.
-                if (infoSrc) {
-                    const res = await fetch(infoSrc, { headers: { Authorization: `Bearer ${token}` } });
-                    const meta = await res.json();
+                const infoRes = await fetch(`/api/content/info/${contentId}`, { headers: { Authorization: `Bearer ${token}` } });
+                if (infoRes.ok) {
+                    const meta = await infoRes.json();
                     setFileSize(meta?.size ?? null);
                 }
 
@@ -167,31 +155,31 @@ export function FilePreview({ filename, src, infoSrc, mode = "inline" }: Props) 
 
                 if (previewMode === "text") {
                     // Text files are stored as strings — no object URL needed.
-                    const cachedText = getCachedText(src);
+                    const cachedText = getCachedText(contentId);
                     if (cachedText !== undefined) {
                         setContent(cachedText);
                         setStatus("ready");
                         return;
                     }
-                    const res = await fetch(src, { headers: { Authorization: `Bearer ${token}` } });
+                    const res = await fetchFile(contentId, token);
                     if (!res.ok) { setStatus("error"); return; }
                     const text = await res.text();
-                    setCachedText(src, text);
+                    setCachedText(contentId, text);
                     setContent(text);
                     setStatus("ready");
 
                 } else if (previewMode === "table") {
                     // SheetJS needs an ArrayBuffer, but we cache the raw Blob so
                     // the same bytes can be reused without re-fetching.
-                    const cachedBlob = getCachedBlob(src);
+                    const cachedBlob = getCachedBlob(contentId);
                     let buf: ArrayBuffer;
                     if (cachedBlob) {
                         buf = await cachedBlob.arrayBuffer();
                     } else {
-                        const res = await fetch(src, { headers: { Authorization: `Bearer ${token}` } });
+                        const res = await fetchFile(contentId, token);
                         if (!res.ok) { setStatus("error"); return; }
                         const blob = await res.blob();
-                        setCachedBlob(src, blob);
+                        setCachedBlob(contentId, blob);
                         buf = await blob.arrayBuffer();
                     }
                     // Parse just the first sheet and convert to a 2-D string array.
@@ -207,22 +195,23 @@ export function FilePreview({ filename, src, infoSrc, mode = "inline" }: Props) 
                 } else {
                     // All remaining modes (image, video, audio, html, docviewer)
                     // need an object URL pointing at the raw blob.
-                    const cachedBlob = getCachedBlob(src);
+                    const cachedBlob = getCachedBlob(contentId);
                     let blob: Blob;
                     if (cachedBlob) {
                         blob = cachedBlob;
                     } else {
-                        const res = await fetch(src, { headers: { Authorization: `Bearer ${token}` } });
+                        const res = await fetchFile(contentId, token);
                         if (!res.ok) { setStatus("error"); return; }
                         blob = await res.blob();
-                        setCachedBlob(src, blob);
+                        setCachedBlob(contentId, blob);
                     }
                     localUrl = URL.createObjectURL(blob);
                     setObjectUrl(localUrl);
 
-                    //microsoft documents need this in addition to blob url
+                    // The Office 365 viewer fetches the file from Microsoft's servers,
+                    // so it needs the presigned URL itself, not our local blob URL
                     if (previewMode === "microsoft") {
-                        await getPublicUrl(contentId);
+                        setPublicUrl(await getFileUrl(contentId, token));
                     }
 
                     //Adding to hit count
@@ -273,7 +262,7 @@ export function FilePreview({ filename, src, infoSrc, mode = "inline" }: Props) 
                 setStatus("loading");
             }
         };
-    }, [infoSrc, previewMode, src]);
+    }, [contentId, previewMode]);
 
     return (
         <div className="bg-background overflow-hidden">
