@@ -1,0 +1,23 @@
+AFTER-HOURS ESCALATION CONTACTS
+Business Operations — review monthly
+
+Use this list only when the main claims line is closed or a catastrophe code
+is active. All numbers below are internal extensions; email addresses are
+team mailboxes, not individuals.
+
+TEAM                         EXTENSION   MAILBOX
+---------------------------  ----------  ------------------------------
+Claims duty manager          4400        claims-duty@example.com
+Catastrophe coordinator      4410        cat-desk@example.com
+Underwriting on call         4520        uw-oncall@example.com
+IT service desk (24x7)       4999        it-help@example.com
+Communications               4610        comms@example.com
+Facilities / building access 4700        facilities@example.com
+
+ESCALATION ORDER
+1. Claims duty manager
+2. Catastrophe coordinator (only if a catastrophe code is active)
+3. Director of Business Operations — via the duty manager, never directly
+
+Report outages of the claims system to the IT service desk first, then the
+duty manager.

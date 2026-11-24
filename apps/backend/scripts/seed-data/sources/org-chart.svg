@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="360" viewBox="0 0 900 360" font-family="Helvetica, Arial, sans-serif">
+  <title>Cobalt Harbor Mutual organization chart</title>
+  <rect width="900" height="360" fill="#ffffff"/>
+  <text x="450" y="34" text-anchor="middle" font-size="20" font-weight="bold" fill="#1e293b">Organization Chart</text>
+  <g stroke="#94a3b8" stroke-width="2" fill="none">
+    <path d="M450 110 V150 H75 V190"/>
+    <path d="M450 150 H225 V190"/>
+    <path d="M450 150 V190"/>
+    <path d="M450 150 H675 V190"/>
+    <path d="M450 150 H825 V190"/>
+  </g>
+  <g font-size="14" text-anchor="middle" fill="#0f172a">
+    <rect x="350" y="55" width="200" height="55" rx="8" fill="#e0e7ff" stroke="#4f46e5" stroke-width="2"/>
+    <text x="450" y="80" font-weight="bold">Chief Operating Officer</text>
+    <text x="450" y="98" font-size="12">Administration</text>
+  </g>
+  <g font-size="13" text-anchor="middle" fill="#0f172a">
+    <rect x="10" y="190" width="130" height="60" rx="8" fill="#f1f5f9" stroke="#64748b"/>
+    <text x="75" y="216">Underwriting</text><text x="75" y="234" font-size="11">Personal Lines</text>
+    <rect x="160" y="190" width="130" height="60" rx="8" fill="#f1f5f9" stroke="#64748b"/>
+    <text x="225" y="216">Business</text><text x="225" y="234">Analysis</text>
+    <rect x="385" y="190" width="130" height="60" rx="8" fill="#f1f5f9" stroke="#64748b"/>
+    <text x="450" y="216">Actuarial</text><text x="450" y="234" font-size="11">Pricing &amp; Reserving</text>
+    <rect x="610" y="190" width="130" height="60" rx="8" fill="#f1f5f9" stroke="#64748b"/>
+    <text x="675" y="216">EXL</text><text x="675" y="234">Operations</text>
+    <rect x="760" y="190" width="130" height="60" rx="8" fill="#f1f5f9" stroke="#64748b"/>
+    <text x="825" y="216">Business</text><text x="825" y="234">Operations</text>
+  </g>
+  <text x="450" y="320" text-anchor="middle" font-size="12" fill="#64748b">Effective this quarter · Contact Administration with changes</text>
+</svg>

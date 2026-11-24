@@ -4,7 +4,12 @@
     "type": "module",
     "scripts": {
         "dev": "nodemon",
-        "start": "tsx src/app.ts"
+        "start": "tsx src/app.ts",
+        "seed": "tsx scripts/seed.ts",
+        "backfill": "tsx scripts/backfill.ts",
+        "backfill:text": "tsx scripts/backfill-text.ts",
+        "test:nl-query": "tsx scripts/test-nl-query.ts",
+        "test:nl-query-exec": "tsx scripts/test-nl-query-exec.ts"
     },
     "dependencies": {
         "@softeng-app/db": "workspace:*",

@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="300" viewBox="0 0 960 300" font-family="Helvetica, Arial, sans-serif">
+  <title>Flood claim workflow: FNOL to closure</title>
+  <rect width="960" height="300" fill="#ffffff"/>
+  <text x="480" y="36" text-anchor="middle" font-size="22" font-weight="bold" fill="#1e293b">Flood Claim Workflow</text>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+  </defs>
+  <g font-size="14" fill="#0f172a" text-anchor="middle">
+    <rect x="20" y="110" width="140" height="70" rx="10" fill="#dbeafe" stroke="#2563eb" stroke-width="2"/>
+    <text x="90" y="141">First Notice</text><text x="90" y="160">of Loss</text>
+    <rect x="205" y="110" width="140" height="70" rx="10" fill="#dbeafe" stroke="#2563eb" stroke-width="2"/>
+    <text x="275" y="141">Verify</text><text x="275" y="160">Coverage</text>
+    <rect x="390" y="110" width="140" height="70" rx="10" fill="#fef3c7" stroke="#d97706" stroke-width="2"/>
+    <text x="460" y="141">Assign</text><text x="460" y="160">Adjuster</text>
+    <rect x="575" y="110" width="140" height="70" rx="10" fill="#fef3c7" stroke="#d97706" stroke-width="2"/>
+    <text x="645" y="141">Inspect &amp;</text><text x="645" y="160">Estimate</text>
+    <rect x="760" y="110" width="180" height="70" rx="10" fill="#dcfce7" stroke="#16a34a" stroke-width="2"/>
+    <text x="850" y="141">Proof of Loss,</text><text x="850" y="160">Payment, Close</text>
+  </g>
+  <g stroke="#475569" stroke-width="2" marker-end="url(#arrow)">
+    <line x1="160" y1="145" x2="203" y2="145"/>
+    <line x1="345" y1="145" x2="388" y2="145"/>
+    <line x1="530" y1="145" x2="573" y2="145"/>
+    <line x1="715" y1="145" x2="758" y2="145"/>
+  </g>
+  <g font-size="12" fill="#475569" text-anchor="middle">
+    <text x="275" y="210">Policy in force on date of loss?</text>
+    <text x="460" y="210">Desk / Field / Large loss by estimate</text>
+    <text x="645" y="210">Target: 3 business days</text>
+    <text x="850" y="210">Proof of loss within 60 days</text>
+  </g>
+  <text x="480" y="270" text-anchor="middle" font-size="12" fill="#64748b">Claims Operations procedure CO-114 · Cobalt Harbor Mutual</text>
+</svg>

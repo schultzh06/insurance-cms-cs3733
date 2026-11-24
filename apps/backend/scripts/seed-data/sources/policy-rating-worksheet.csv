@@ -1,0 +1,15 @@
+Rating Step,Factor / Amount,Running Premium,Notes
+"Base rate per $1,000 Coverage A",0.85,,"Territory T03, single-family, slab"
+Coverage A limit,250000,212.50,0.85 x 250
+Distance to coast factor,1.42,301.75,
+Flood frequency factor,1.18,356.07,
+First floor height factor,0.88,313.34,Elevation Certificate on file
+Foundation factor (slab),1.00,313.34,
+Coverage C base,100000,,Contents
+Contents premium,,96.20,
+"Deductible factor ($2,000)",0.92,376.78,Applied to building + contents
+ICC premium,,28.00,Increased Cost of Compliance
+Reserve fund assessment (18%),,72.86,
+HFIAA surcharge,,25.00,Primary residence
+Federal policy fee,,47.00,
+Total annual premium,,549.64,
