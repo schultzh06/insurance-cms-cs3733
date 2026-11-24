@@ -18,7 +18,9 @@ export async function generateNLQuery(req: Request, res: Response) {
     }
 
     try {
-        const result = await answerQuestion(parseResult.data);
+        // Cost is for server logs only; keep it out of the client contract.
+        const { costUsd, ...result } = await answerQuestion(parseResult.data);
+        console.log(`[nl-query] question cost=$${costUsd.toFixed(6)}`);
 
         return res.json(result);
     } catch (error) {

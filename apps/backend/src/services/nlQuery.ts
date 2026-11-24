@@ -23,7 +23,12 @@ export type NLQueryFullResult = NLQueryResponse & {
     rows: Record<string, unknown>[] | null;
     columns: string[] | null;
     error?: string;
+    /** Total OpenRouter spend in USD across all LLM calls for this question (incl. retries). */
+    costUsd: number;
 }
+
+/** A generated SQL response plus what the call cost. */
+type CostedResponse = NLQueryResponse & { costUsd: number };
 
 /**
  * Calls OpenAI to generate SQL, then validates and (if safe) executes it
@@ -34,12 +39,14 @@ export async function answerQuestion(
     request: NLQueryRequest,
 ): Promise<NLQueryFullResult> {
     let llmResponse = await generateSQLFromQuestion(request);
+    let costUsd = llmResponse.costUsd;
 
     //No data responses, returns error message from llm
     const noData = isNoDataResponse(llmResponse.sql);
     if (noData.isNoData) {
         return {
             ...llmResponse,
+            costUsd,
             rows: null,
             columns: null,
             error: noData.message
@@ -56,6 +63,7 @@ export async function answerQuestion(
             });
             return {
                 ...llmResponse,
+            costUsd,
                 rows: null,
                 columns: null,
                 error:
@@ -73,6 +81,7 @@ export async function answerQuestion(
 
             return {
                 ...llmResponse,
+            costUsd,
                 rows: serializeRows(truncated),
                 columns
             };
@@ -89,6 +98,7 @@ export async function answerQuestion(
                     question: `The previous query failed with this error:\n\n${errMessage}\n\nPlease fix the query. Original question: ${request.question}`,
                     history: request.history,
                 });
+                costUsd += llmResponse.costUsd;
                 continue;
             }
 
@@ -96,6 +106,7 @@ export async function answerQuestion(
             console.error("[nl-query] query failed after retries:", errMessage);
             return {
                 ...llmResponse,
+            costUsd,
                 rows: null,
                 columns: null,
                 error:
@@ -137,9 +148,7 @@ function serializeRows(
  */
 export async function generateSQLFromQuestion(
     request: NLQueryRequest,
-): Promise<NLQueryResponse> {
-
-    console.log("Calling OpenAI with model:", NL_QUERY_MODEL);
+): Promise<CostedResponse> {
 
     const completion = await openai.chat.completions.parse({
         model: NL_QUERY_MODEL,
@@ -155,7 +164,13 @@ export async function generateSQLFromQuestion(
         response_format: zodResponseFormat(NLQueryResponseSchema, "nl_query"),
     })
 
-    console.log("Tokens used:", completion.usage);
+    // OpenRouter extends `usage` with the billed cost in USD (absent from the OpenAI SDK types).
+    const usage = completion.usage as (typeof completion.usage & { cost?: number }) | undefined;
+    const costUsd = usage?.cost ?? 0;
+    console.log(
+        `[nl-query] model=${NL_QUERY_MODEL} prompt=${usage?.prompt_tokens} ` +
+        `completion=${usage?.completion_tokens} cost=$${costUsd.toFixed(6)}`,
+    );
 
     const parsed = completion.choices[0]?.message.parsed;
     if (!parsed) {
@@ -169,6 +184,6 @@ export async function generateSQLFromQuestion(
         )
     }
 
-    return parsed;
+    return { ...parsed, costUsd };
 
 }
