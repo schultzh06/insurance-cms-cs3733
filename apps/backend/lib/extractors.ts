@@ -8,18 +8,25 @@ import OpenAI from 'openai';
 
 const MAX_TEXT_LENGTH = 8000;
 const OCR_VISION_THRESHOLD = 50; // chars below which we try the vision model
-const IMAGE_DESCRIPTION_MODEL = 'gpt-5.4-nano';
+/** OpenRouter model id for describing images OCR can't read. Overridable via env. */
+const IMAGE_DESCRIPTION_MODEL = process.env.IMAGE_DESCRIPTION_MODEL ?? 'openai/gpt-5.4-nano';
+/** How long to skip vision after OpenRouter reports no budget (402) or rate limiting (429). */
+const VISION_COOLDOWN_MS = 15 * 60 * 1000;
 
 let _openai: OpenAI | null = null;
+/** Lazily builds the OpenRouter client; returns null (OCR-only) when no key is configured. */
 function getOpenAI(): OpenAI | null {
     if (_openai) return _openai;
-    const key = process.env.OPENAI_API_KEY;
+    const key = process.env.OPENROUTER_API_KEY;
     if (!key) return null;
-    _openai = new OpenAI({ apiKey: key });
+    _openai = new OpenAI({ apiKey: key, baseURL: 'https://openrouter.ai/api/v1' });
     return _openai;
 }
 
+// Permanent off-switch for a bad key; budget/rate errors use the timed pause instead,
+// so a long-running server resumes vision once the weekly spend cap resets.
 let _visionDisabled = false;
+let _visionPausedUntil = 0;
 let _visionTokensTotal = 0;
 let _verbose = false;
 
@@ -60,8 +67,9 @@ async function ocrImage(buffer: Buffer): Promise<string> {
     // OCR found little text — image is likely a diagram/photo, try vision model
     vlog(`    ocr below threshold (${OCR_VISION_THRESHOLD}), trying vision`);
     if (_visionDisabled) { vlog(`    vision disabled`); return ocrText; }
+    if (Date.now() < _visionPausedUntil) { vlog(`    vision paused (budget/rate limit)`); return ocrText; }
     const client = getOpenAI();
-    if (!client) { vlog(`    no OpenAI key, skipping vision`); return ocrText; }
+    if (!client) { vlog(`    no OpenRouter key, skipping vision`); return ocrText; }
 
     try {
         // Normalize to PNG — OpenAI vision accepts JPEG/PNG/WebP/GIF, not raw buffers of arbitrary format
@@ -81,15 +89,20 @@ async function ocrImage(buffer: Buffer): Promise<string> {
             max_completion_tokens: 300,
         });
 
-        const tokens = response.usage?.total_tokens ?? 0;
+        // OpenRouter adds the billed USD cost to `usage` (absent from the OpenAI SDK types).
+        const usage = response.usage as (typeof response.usage & { cost?: number }) | undefined;
+        const tokens = usage?.total_tokens ?? 0;
         _visionTokensTotal += tokens;
-        console.log(`  [vision] ${tokens} tokens (running total: ${_visionTokensTotal})`);
+        console.log(`  [vision] ${IMAGE_DESCRIPTION_MODEL} ${tokens} tokens, cost=$${(usage?.cost ?? 0).toFixed(6)} (running total: ${_visionTokensTotal} tokens)`);
 
         return response.choices[0]?.message?.content?.trim() ?? ocrText;
     } catch (err: any) {
-        if (err?.code === 'missing_scope' || err?.status === 401) {
+        if (err?.status === 401 || err?.status === 403) {
             _visionDisabled = true;
-            console.warn(`  [vision] API key lacks model.request scope — skipping vision for remaining images`);
+            console.warn(`  [vision] OpenRouter key rejected (${err.status}) — skipping vision for remaining images`);
+        } else if (err?.status === 402 || err?.status === 429) {
+            _visionPausedUntil = Date.now() + VISION_COOLDOWN_MS;
+            console.warn(`  [vision] OpenRouter ${err.status === 402 ? 'out of budget' : 'rate-limited'} — OCR only for ${VISION_COOLDOWN_MS / 60000} min`);
         } else {
             console.error(`  [vision] error:`, err?.message ?? err);
         }
