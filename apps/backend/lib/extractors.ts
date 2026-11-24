@@ -5,6 +5,16 @@ import Tesseract from 'tesseract.js';
 import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
 import * as XLSX from 'xlsx';
 import OpenAI from 'openai';
+import { createRequire } from 'module';
+import { dirname, join } from 'path';
+
+// pdf.js needs its bundled decoders (JPEG 2000, JBIG2) and standard fonts to render
+// scanned pages. Without them, a JPEG 2000 image makes pdf.js throw from an internal
+// callback, outside the render promise, which crashes the whole process. In Node it
+// reads these from filesystem paths, which must end in a separator.
+const PDFJS_DIR = dirname(createRequire(import.meta.url).resolve('pdfjs-dist/package.json'));
+const PDFJS_WASM_URL = join(PDFJS_DIR, 'wasm') + '/';
+const PDFJS_FONTS_URL = join(PDFJS_DIR, 'standard_fonts') + '/';
 
 const MAX_TEXT_LENGTH = 8000;
 const OCR_VISION_THRESHOLD = 50; // chars below which we try the vision model
@@ -98,7 +108,11 @@ async function ocrImage(buffer: Buffer): Promise<string> {
 }
 
 async function ocrPdf(buffer: Buffer): Promise<string> {
-    const loadingTask = pdfjs.getDocument({ data: new Uint8Array(buffer) });
+    const loadingTask = pdfjs.getDocument({
+        data: new Uint8Array(buffer),
+        wasmUrl: PDFJS_WASM_URL,
+        standardFontDataUrl: PDFJS_FONTS_URL,
+    });
     const pdf = await loadingTask.promise;
     const textParts: string[] = [];
 
@@ -119,7 +133,10 @@ async function ocrPdf(buffer: Buffer): Promise<string> {
             vlog(`    page ${i}: sparse native text (${pageText.length} chars), trying OCR`);
             try {
                 const viewport = page.getViewport({ scale: 2.0 });
-                const { createCanvas } = await import('canvas');
+                // Must be the same canvas library pdf.js uses internally (@napi-rs/canvas in
+                // Node): pdf.js draws its own image canvases onto this one, and mixing in
+                // node-canvas throws "Image or Canvas expected" from an uncatchable callback.
+                const { createCanvas } = await import('@napi-rs/canvas');
                 const canvas = createCanvas(viewport.width, viewport.height);
                 const context = canvas.getContext('2d');
 
@@ -132,8 +149,9 @@ async function ocrPdf(buffer: Buffer): Promise<string> {
                 const imageBuffer = canvas.toBuffer('image/png');
                 const ocrText = await ocrImage(imageBuffer);
                 if (ocrText) textParts.push(ocrText);
-            } catch {
-                // Page contains unsupported image format (e.g. JBIG2, JPEG2000) — skip
+            } catch (err) {
+                // Page couldn't be rendered for OCR — skip it, but say why when verbose
+                vlog(`    page ${i}: OCR render failed: ${(err as Error)?.message ?? err}`);
             }
         }
     }

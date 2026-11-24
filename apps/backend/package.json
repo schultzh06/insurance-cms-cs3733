@@ -12,13 +12,13 @@
         "test:nl-query-exec": "tsx scripts/test-nl-query-exec.ts"
     },
     "dependencies": {
+        "@napi-rs/canvas": "0.1.100",
         "@softeng-app/db": "workspace:*",
         "@types/mime-types": "^3.0.1",
         "@xenova/transformers": "^2.17.2",
         "auth0": "^5.6.0",
         "axios": "^1.14.0",
         "bcrypt": "^6.0.0",
-        "canvas": "^3.2.3",
         "cheerio": "^1.2.0",
         "cors": "^2.8.6",
         "dotenv": "^17.3.1",
