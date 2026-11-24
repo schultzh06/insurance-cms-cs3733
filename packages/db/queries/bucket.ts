@@ -1,64 +1,87 @@
-import { supabase } from '../lib/supabase'
-import { prisma } from "../lib/prisma";
+import {
+    DeleteObjectCommand,
+    GetObjectCommand,
+    HeadObjectCommand,
+    NotFound,
+    PutObjectCommand,
+} from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import mime from "mime-types";
+import { r2, R2_BUCKETS, type BucketKey } from "../lib/r2";
 
 /**
- * Supabase Storage operations — wraps the JS SDK and normalises errors by throwing.
- * Defaults to the "content" bucket unless an alternate bucket is specified.
+ * Cloudflare R2 storage operations (S3 API). Callers pass a logical bucket key
+ * ("content" by default, or "profiles"); errors are thrown, not returned.
+ *
+ * Object keys are the same paths stored in `Content.fileURI` and
+ * `Employee.profilePhotoURI`, so no database change is needed.
  */
 export class Bucket {
 
-    /** Creates a signed URL for a file, valid for `expiresIn` seconds (default 1 hour). Returns null if no URL is returned. */
-    public static async createSignedUrl(path: string, expiresIn: number = 3600, bucket: string = "content"): Promise<string | null> {
-        const {data, error} = await supabase.storage.from(bucket).createSignedUrl(path, expiresIn);
-        if (error) throw error;
-        return data?.signedUrl ?? null;
+    /**
+     * Creates a presigned GET URL valid for `expiresIn` seconds (default 1 hour).
+     * The response is forced to `inline` with a MIME type derived from the key,
+     * so browsers preview the file instead of downloading it.
+     */
+    public static async createSignedUrl(path: string, expiresIn: number = 3600, bucket: BucketKey = "content"): Promise<string> {
+        const filename = path.split("/").pop() ?? "download";
+        return getSignedUrl(r2, new GetObjectCommand({
+            Bucket: R2_BUCKETS[bucket],
+            Key: path,
+            ResponseContentType: mime.lookup(filename) || "application/octet-stream",
+            // encodeURIComponent keeps non-ASCII filenames valid in the header (RFC 5987)
+            ResponseContentDisposition: `inline; filename*=UTF-8''${encodeURIComponent(filename)}`,
+        }), { expiresIn });
     }
 
-    /** Uploads a new file. Throws on collision — use `updateFile` when the path may already exist. */
-    public static async uploadFile(file: Buffer, path: string, bucket = "content"): Promise<{id: string, path: string, fullPath: string}> {
-        const {data, error} = await supabase.storage.from(bucket).upload(path, file)
-        if (error) throw error;
-        return data;
+    /**
+     * Uploads a file. Throws if the key already exists — R2 honours `If-None-Match: *`,
+     * which preserves the old Supabase "no overwrite" behaviour. Use `updateFile` to replace.
+     */
+    public static async uploadFile(file: Buffer, path: string, bucket: BucketKey = "content"): Promise<{ path: string }> {
+        await r2.send(new PutObjectCommand({
+            Bucket: R2_BUCKETS[bucket],
+            Key: path,
+            Body: file,
+            ContentType: mime.lookup(path) || "application/octet-stream",
+            IfNoneMatch: "*",
+        }));
+        return { path };
     }
 
-    /** Replaces an existing file in-place. Preferred over delete+upload when the path should stay stable. */
-    public static async updateFile(file: Buffer, path: string, bucket = "content"): Promise<{id: string, path: string, fullPath: string}> {
-        const {data, error} = await supabase.storage.from(bucket).update(path, file)
-        if (error) throw error;
-        return data;
+    /** Replaces (or creates) the object at `path`. */
+    public static async updateFile(file: Buffer, path: string, bucket: BucketKey = "content"): Promise<{ path: string }> {
+        await r2.send(new PutObjectCommand({
+            Bucket: R2_BUCKETS[bucket],
+            Key: path,
+            Body: file,
+            ContentType: mime.lookup(path) || "application/octet-stream",
+        }));
+        return { path };
     }
 
-    /** Downloads a file from storage as a `Blob`. */
-    public static async downloadFile(path: string, bucket = "content"): Promise<Blob> {
-        const {data, error} = await supabase.storage.from(bucket).download(path)
-        if (error) throw error;
-        return data;
+    /** Downloads a file into memory. Used server-side only (text extraction / embeddings). */
+    public static async downloadFile(path: string, bucket: BucketKey = "content"): Promise<Buffer> {
+        const res = await r2.send(new GetObjectCommand({ Bucket: R2_BUCKETS[bucket], Key: path }));
+        return Buffer.from(await res.Body!.transformToByteArray());
     }
 
-    /** Returns a 2-minute signed URL for a content item's attached file, or null if no file is set. */
-    public static async createPublicUrl(id: number): Promise<string | null> {
-        const contentItem = await prisma.content.findUnique({
-            where: { id },
-        })
-        const path = contentItem?.fileURI ?? null
-        if (!path) { return null }
-        return Bucket.createSignedUrl(path, 120);
+    /**
+     * Returns `{ size, mimetype }` for an object, or null if it doesn't exist.
+     * Field names match the old Supabase metadata so the frontend is unaffected.
+     */
+    public static async getFileMetadata(path: string, bucket: BucketKey = "content"): Promise<{ size: number; mimetype: string | null } | null> {
+        try {
+            const head = await r2.send(new HeadObjectCommand({ Bucket: R2_BUCKETS[bucket], Key: path }));
+            return { size: head.ContentLength ?? 0, mimetype: head.ContentType ?? null };
+        } catch (error) {
+            if (error instanceof NotFound) return null;
+            throw error;
+        }
     }
 
-    /** Returns Supabase metadata (size, MIME type, etc.) for a file path, or null if the file isn't found. */
-    public static async getFileMetadata(path: string, bucket = "content") {
-        const parts = path.split("/");
-        const filename = parts.pop()!;
-        const folder = parts.join("/");
-        const {data, error} = await supabase.storage.from(bucket).list(folder, {search: filename});
-        if (error) throw error;
-        const file = data.find((f) => f.name === filename);
-        return file?.metadata ?? null;
-    }
-
-    /** Deletes a file from storage. Throws if the Supabase SDK returns an error. */
-    public static async deleteFile(path: string, bucket = "content") {
-        const {error} = await supabase.storage.from(bucket).remove([path])
-        if (error) throw error;
+    /** Deletes an object. S3 semantics: deleting a missing key succeeds silently. */
+    public static async deleteFile(path: string, bucket: BucketKey = "content"): Promise<void> {
+        await r2.send(new DeleteObjectCommand({ Bucket: R2_BUCKETS[bucket], Key: path }));
     }
 }
