@@ -1,7 +1,6 @@
 import * as q from "@softeng-app/db";
 import { generateEmbedding } from "../../lib/embeddings";
 import { buildContentEmbeddingInput } from "../../lib/embeddingInputs";
-import mime from "mime-types";
 import * as cheerio from "cheerio";
 import { req, res } from "./types";
 import { getEmployee } from "../helpers/getEmployee";
@@ -153,35 +152,38 @@ export const getContentInfo = async (req: req, res: res) => {
     }
 };
 
-/** GET /api/content/:id/download — streams the attached file with `Content-Disposition: inline`. */
-export const downloadContent = async (req: req, res: res) => {
+/** Lifetime of presigned file URLs, in seconds. Short because a URL works for anyone holding it until it expires. */
+const FILE_URL_TTL_SECONDS = 300;
+
+/**
+ * GET /api/content/file-url/:id — returns `{ url, expiresAt }`, a presigned R2 URL
+ * the browser fetches directly (no file bytes pass through this server).
+ *
+ * Access rules, enforced here because the URL itself carries no auth:
+ *   - non-deleted content: any authenticated employee (matches the "All" tab)
+ *   - soft-deleted content: only the owner or an admin (matches the recycle bin)
+ * Deleted items the caller can't see return 404 rather than 403, so their existence isn't leaked.
+ */
+export const getFileUrl = async (req: req, res: res) => {
     try {
+        const employee = await getEmployee(req);
+        if (!employee)
+            return res.status(404).json({ error: "Employee not found" });
+
         const id = parseInt(req.params.id);
-        const content = await q.Content.queryContentById(id);
-        if (!content || !content.fileURI) {
+        let fileURI = (await q.Content.queryContentById(id))?.fileURI ?? null;
+        if (!fileURI) {
+            // Not found among live content — fall back to the recycle bin, owner/admin only
+            const deleted = await q.Content.queryDeletedContentById(id);
+            if (deleted && isUserOrAdmin(deleted.ownerId ?? 0, employee)) fileURI = deleted.fileURI;
+        }
+        if (!fileURI) {
             return res.status(404).json({ message: "File not found" });
         }
-        const blob = await q.Bucket.downloadFile(content.fileURI);
-        const buffer = Buffer.from(await blob.arrayBuffer());
-        const filename = content.fileURI.split("/").pop() ?? "download";
-        const contentType = mime.lookup(filename) || "application/octet-stream";
-        res.setHeader("Content-Type", contentType);
-        res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
-        res.setHeader("Content-Length", buffer.length);
-        return res.send(buffer);
-    } catch (error) {
-        console.error(error);
-        return res.status(500).end();
-    }
-};
 
-/** GET /api/content/:id/url — returns a short-lived (2-minute) signed URL for the attached file. */
-export const getPublicFileUrl = async (req: req, res: res) => {
-    try {
-        const id = parseInt(req.params.id);
-        const publicUrl = await q.Bucket.createPublicUrl(id);
-        if (!publicUrl) return res.status(404).end();
-        return res.status(200).json(publicUrl);
+        const url = await q.Bucket.createSignedUrl(fileURI, FILE_URL_TTL_SECONDS);
+        const expiresAt = new Date(Date.now() + FILE_URL_TTL_SECONDS * 1000).toISOString();
+        return res.status(200).json({ url, expiresAt });
     } catch (error) {
         console.error(error);
         return res.status(500).end();
