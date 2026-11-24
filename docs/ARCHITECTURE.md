@@ -34,21 +34,22 @@
 apps/
   backend/
     lib/                   Backend-only utilities (not shared via packages/db)
-      embeddings.ts        generateEmbedding() — OpenAI text-embedding-3-small wrapper
+      embeddings.ts        generateEmbedding() — client for the ML embedding sidecar (apps/python)
       embeddingInputs.ts   buildEmbeddingInput() per entity kind (content, collection, employee, SR)
-      extractors.ts        extractText() — pulls plain text from PDF/DOCX/TXT for backfill
+      extractors.ts        extractText() — plain text from files; OCR + OpenRouter vision fallback for images
     scripts/               One-shot maintenance scripts (not loaded at runtime)
       backfill.ts          Backfills embeddings from Supabase-stored files
       backfill-text.ts     Backfills embeddings from extracted file text
       test-nl-query.ts     Interactive CLI test for the NL-query LLM pipeline
       test-nl-query-exec.ts Same but also executes the generated SQL
+      eval-nl-query.ts     Measures OpenRouter spend + latency per question for one model
     src/
       app.ts               Express entry — middleware, routes, static serving, listen
       jobs/
         index.ts           Registers node-cron schedules (runs on server start)
         autoTag.ts         Hourly job: applies "Expiring Soon" / "Expired" tags to content
       services/
-        nlQuery.ts         answerQuestion() — calls OpenAI, validates SQL, executes on read-only Postgres
+        nlQuery.ts         answerQuestion() — calls the LLM via OpenRouter, validates SQL, executes on read-only Postgres
       hooks/               Thin route handlers (parse req → call packages/db → JSON)
         content.ts
         employee.ts
@@ -63,8 +64,9 @@ apps/
       helpers/
         auth0Management.ts   Auth0 Management API client
         getEmployee.ts       Resolves JWT → EmployeeModel; used by every protected handler
+        nlQueryRateLimit.ts  Per-user Insights limits (10/min, 100/week), in-memory
         nlQuerySchema.ts     Zod schemas for NL-query request/response (shared by hook + service)
-        openai.ts            OpenAI client singleton + model constant
+        openai.ts            OpenAI-SDK client pointed at OpenRouter + NL_QUERY_MODEL
         permissions.ts       isAdmin / isUserOrAdmin / isPersonaOrAdmin — extracted so permission logic is testable without Express
         sqlSafety.ts         validateSQL() — allowlist-based SQL safety check before execution; isNoDataResponse()
         validateUrl.ts       assertPublicUrl — SSRF-safe URL validator (DNS-resolves before fetching)
@@ -125,7 +127,7 @@ All routes are JSON unless noted. File-upload routes use `multipart/form-data` w
 - `GET /api/preview?url=...` — fetches a URL server-side and extracts OG metadata + favicon. Blocks private/loopback/link-local addresses to prevent SSRF. 2 MB cap, 5 s timeout.
 
 **Unified search**
-- `GET /api/search?q=...&limit=N` — semantic search across all four entity types (content, collections, employees, service requests). Generates an OpenAI embedding for the query, fans out to each entity's `semanticSearch` in parallel (respecting admin visibility rules for collections), and returns results sorted by similarity score. `limit` is capped at 50; default 20. Each result is tagged with `kind` and `similarity`.
+- `GET /api/search?q=...&limit=N` — semantic search across all four entity types (content, collections, employees, service requests). Embeds the query via the ML sidecar, fans out to each entity's `semanticSearch` in parallel (respecting admin visibility rules for collections), and returns results sorted by similarity score. `limit` is capped at 50; default 20. Each result is tagged with `kind` and `similarity`.
 
 **Content** (`/api/content`)
 - `GET    /api/content[?persona=...][?unlinkedSR=true]` — all content, or filter by target persona (`admin` returns everything); `unlinkedSR=true` restricts to items with no linked service request
@@ -197,7 +199,7 @@ All routes are JSON unless noted. File-upload routes use `multipart/form-data` w
 - `GET    /api/notifications/dismissed` — caller's previously dismissed notifications (for the "dismissed" view).
 
 **Natural-language query**
-- `POST /api/nl-query` — accepts `{ question, history[] }`. Calls OpenAI with a schema-aware system prompt; the response includes a SQL query and chart suggestion. The SQL is safety-validated (read-only allowlist) then executed against a Postgres read-only user. Returns `{ sql, explanation, chartType, rows, columns }`.
+- `POST /api/nl-query` — accepts `{ question, history[] }`. Calls the LLM (via OpenRouter) with a schema-aware system prompt; the response includes a SQL query and chart suggestion. The SQL is safety-validated (read-only allowlist) then executed against a Postgres read-only user. Returns `{ sql, explanation, suggestedChart, title, rows, columns, error? }`. Rate-limited per user (10/min, 100/week → `429`); OpenRouter out of budget or rate-limited → `503`. Every error response carries a user-facing `error` string.
 
 > **Route order matters in `apps/backend/src/app.ts`**: within the `/api/content` group, `info`, `download`, `publicUrl`, `search`, `tags`, `transaction-summary`, `deleted` must come before `/:id`. Within `/api/collections`, `favorites` and `owned` must come before `/:id`. Within `/api/notifications`, `dismissed` must come before any parameterized sub-route.
 
@@ -499,18 +501,20 @@ At `/insights`. The page maintains a `conversation: ChatTurn[]` and renders eith
 
 **Backend pipeline** (`apps/backend/services/nlQuery.ts`):
 1. Build a static system prompt from DB schema description + few-shot examples (`packages/db/lib/`).
-2. Call OpenAI with structured output (`zodResponseFormat`): `{ sql, explanation, chartType }`.
+2. Call the LLM through OpenRouter's OpenAI-compatible API with structured output (`zodResponseFormat`): `{ sql, explanation, suggestedChart, title }`.
 3. Validate the SQL with `validateSQL` (read-only allowlist in `helpers/sqlSafety.ts`).
 4. Execute on a Postgres read-only user via `prisma.$queryRawUnsafe`. Cap at 1000 rows.
 5. Retry once on validation failure (re-submits with the error as a correction message).
 
-`NL_QUERY_MODEL` is set in `helpers/openai.ts`. The system prompt is built once at module load and cached (it is static content — no reason to rebuild per request).
+`NL_QUERY_MODEL` defaults to `openai/gpt-5.4-mini` in `helpers/openai.ts` and can be overridden by env (any OpenRouter model id). The system prompt is built once at module load and cached (it is static content — no reason to rebuild per request).
+
+**Cost and limits.** The app runs on a spend-capped OpenRouter key (`OPENROUTER_API_KEY`), shared with the image-description fallback. Each call's billed cost (`usage.cost`) is summed across the retry and logged per question; it is not returned to the client. Per-user rate limits (`helpers/nlQueryRateLimit.ts`, keyed by Auth0 `sub`) allow 10 questions/minute and 100/week; counts are in memory and reset on restart, with the OpenRouter cap as the hard backstop. When a limit is hit or the budget is exhausted, the backend returns a "come back later / contact an admin" `error`, which the chat renders as an error card. `scripts/eval-nl-query.ts` measures per-question spend for a given model.
 
 ### Global Search
 
 `features/GlobalSearch.tsx` — semantic search page at `/search`.
 
-Sends `GET /api/search?q=...&limit=N`, which generates an OpenAI embedding for the query and fans out to `Content.semanticSearch`, `Collection.semanticSearch`, `Employee.semanticSearch`, and `ServiceReqs.semanticSearch` in parallel. Results are sorted by similarity score and tagged with `kind`.
+Sends `GET /api/search?q=...&limit=N`, which embeds the query via the ML sidecar and fans out to `Content.semanticSearch`, `Collection.semanticSearch`, `Employee.semanticSearch`, and `ServiceReqs.semanticSearch` in parallel. Results are sorted by similarity score and tagged with `kind`.
 
 The last query is persisted to `localStorage` so navigating away and returning re-runs it automatically. The URL `?q=` param is set on submit and read on mount — the Navbar search bar sets this param when navigating to `/search`.
 
@@ -533,9 +537,9 @@ type SearchResult =
 
 ### Embeddings and semantic search
 
-Each of the four searchable entity types (Content, Collection, Employee, ServiceRequest) has a pgvector `embedding` column. The embedding is generated by `generateEmbedding()` (`apps/backend/lib/embeddings.ts`), which delegates to a separate ML microservice at `ML_SERVICE_URL` (default `http://localhost:3001`). That sidecar wraps `text-embedding-3-small` (1536 dimensions).
+Each of the four searchable entity types (Content, Collection, Employee, ServiceRequest) has a pgvector `embedding` column. The embedding is generated by `generateEmbedding()` (`apps/backend/lib/embeddings.ts`), which delegates to a separate ML microservice at `ML_SERVICE_URL` (default `http://localhost:3001`). That sidecar (`apps/python`, FastAPI + sentence-transformers) runs `ibm-granite/granite-embedding-97m-multilingual-r2` locally on CPU, producing 384-dimension vectors to match the `vector(384)` columns. It is self-hosted deliberately: embeddings run on every search and every entity write, so keeping them off the paid API keeps the OpenRouter budget for Insights. Changing the model means a schema change and a full re-embed.
 
-Embedding inputs are constructed by `buildEmbeddingInput(kind, item)` (`apps/backend/lib/embeddingInputs.ts`) — a plain-text representation of the entity's searchable fields. Text for file-based content is extracted by `extractText()` (`apps/backend/lib/extractors.ts`) using pdf-parse and mammoth.
+Embedding inputs are constructed by `buildEmbeddingInput(kind, item)` (`apps/backend/lib/embeddingInputs.ts`) — a plain-text representation of the entity's searchable fields. Text for file-based content is extracted by `extractText()` (`apps/backend/lib/extractors.ts`). Images go through Tesseract OCR; when OCR finds under 50 characters (a photo or diagram), it asks a vision model via OpenRouter for a description (`IMAGE_DESCRIPTION_MODEL`, default `google/gemini-2.5-flash-lite`). Any vision failure falls back to the OCR text: a rejected key disables vision for the process, and an exhausted budget or rate limit pauses it for 15 minutes.
 
 **Backfill scripts** (`apps/backend/scripts/`) are one-shot utilities run manually to populate embeddings for existing rows — not loaded at runtime.
 

@@ -102,7 +102,9 @@ SUPABASE_URL=
 SUPABASE_ANON_KEY=
 AUTH0_MGMT_CLIENT_ID=
 AUTH0_MGMT_CLIENT_SECRET=
-OPENAI_API_KEY=                 # Required for NL-query (POST /api/nl-query)
+OPENROUTER_API_KEY=             # Required for NL-query (POST /api/nl-query); also used for image descriptions
+NL_QUERY_MODEL=                 # Optional OpenRouter model id (default: openai/gpt-5.4-mini)
+IMAGE_DESCRIPTION_MODEL=        # Optional OpenRouter model id (default: google/gemini-2.5-flash-lite)
 ML_SERVICE_URL=                 # Embedding microservice URL (default: http://localhost:3001)
 ```
 
