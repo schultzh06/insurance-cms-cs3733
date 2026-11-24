@@ -8,7 +8,8 @@ WORKDIR /app
 # Copy full monorepo (needed for workspace deps and prisma schema)
 COPY . .
 
-RUN pnpm install
+# Install exactly what pnpm-lock.yaml pins; fail the build if it's out of date
+RUN pnpm install --frozen-lockfile
 
 # Generate Prisma client
 RUN cd packages/db && npx prisma generate

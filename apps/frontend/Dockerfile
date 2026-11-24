@@ -8,7 +8,8 @@ RUN corepack enable
 WORKDIR /app
 
 COPY . .
-RUN pnpm install
+# Install exactly what pnpm-lock.yaml pins; fail the build if it's out of date
+RUN pnpm install --frozen-lockfile
 RUN pnpm --filter frontend build
 
 # Stage 2: Serve with Nginx
