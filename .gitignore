@@ -9,7 +9,6 @@ __pycache__/
 !.env.example
 .turbo/
 .idea/
-pnpm-lock.yaml
 generated/
 .DS_Store
 CLAUDE.md
