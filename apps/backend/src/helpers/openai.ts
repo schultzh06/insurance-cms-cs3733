@@ -18,4 +18,4 @@ export const openai = new OpenAI({
  * The model used for NL→SQL generation (OpenRouter id, `provider/model`).
  * Overridable via NL_QUERY_MODEL so models can be compared without a code change.
  */
-export const NL_QUERY_MODEL = process.env.NL_QUERY_MODEL ?? "openai/gpt-5.4-mini";
+export const NL_QUERY_MODEL = process.env.NL_QUERY_MODEL || "openai/gpt-5.4-mini";

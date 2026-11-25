@@ -19,7 +19,7 @@ const PDFJS_FONTS_URL = join(PDFJS_DIR, 'standard_fonts') + '/';
 const MAX_TEXT_LENGTH = 8000;
 const OCR_VISION_THRESHOLD = 50; // chars below which we try the vision model
 /** OpenRouter model id for describing images OCR can't read. Overridable via env. */
-const IMAGE_DESCRIPTION_MODEL = process.env.IMAGE_DESCRIPTION_MODEL ?? 'google/gemini-2.5-flash-lite';
+const IMAGE_DESCRIPTION_MODEL = process.env.IMAGE_DESCRIPTION_MODEL || 'google/gemini-2.5-flash-lite';
 /** How long to skip vision after OpenRouter reports no budget (402) or rate limiting (429). */
 const VISION_COOLDOWN_MS = 15 * 60 * 1000;
 

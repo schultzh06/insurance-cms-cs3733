@@ -60,8 +60,8 @@ function preflight(): string {
         console.error(`Missing env keys in apps/backend/.env: ${missing.join(', ')}`);
         process.exit(1);
     }
-    if (!process.env.OPENAI_API_KEY) {
-        console.warn('OPENAI_API_KEY not set — image text extraction will skip the vision model.');
+    if (!process.env.OPENROUTER_API_KEY) {
+        console.warn('OPENROUTER_API_KEY not set — image text extraction will skip the vision model.');
     }
 
     const dbHost = new URL(process.env.DATABASE_URL!).host;

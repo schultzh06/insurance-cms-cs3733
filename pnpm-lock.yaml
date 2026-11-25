@@ -66,6 +66,9 @@ importers:
       express-oauth2-jwt-bearer:
         specifier: ^1.8.0
         version: 1.11.0
+      express-rate-limit:
+        specifier: ^8.7.5
+        version: 8.7.5(express@5.3.0)
       mammoth:
         specifier: ^1.12.0
         version: 1.13.0
@@ -3627,6 +3630,12 @@ packages:
   express-oauth2-jwt-bearer@1.11.0:
     resolution: {integrity: sha512-5ZHTFV/2L7t8UhFBsEqSe5TgZtx4NSqj94sbNQ2bdPQV7sVHTftsBVkJT4HPJaBnKnHCJ7n520fPE9VDrF0zpg==}
     engines: {node: ^12.19.0 || ^14.15.0 || ^16.13.0 || ^18.12.0 || ^20.2.0 || ^22.1.0 || ^24.0.0 || ^26.0.0}
+
+  express-rate-limit@8.7.5:
+    resolution: {integrity: sha512-wi+v38cx2EqD0JnhE/e74o5tFqKWUOAPFJIgyEiqJ8v2MNpoOAA3kI2hXYOI+YM+HE5yqbdAlVxm2GqOIeYOgA==}
+    engines: {node: '>= 16'}
+    peerDependencies:
+      express: '>= 4.11'
 
   express@5.3.0:
     resolution: {integrity: sha512-qCqy1xSoaugxOD4IVHb1ZWdkvCF2W3aE2okKouWj8VwJ+ztskSiXoBnCSJqfKT+cVPJhuJqe9YLbY425+Zh00g==}
@@ -9190,6 +9199,14 @@ snapshots:
   express-oauth2-jwt-bearer@1.11.0:
     dependencies:
       jose: 4.15.9
+
+  express-rate-limit@8.7.5(express@5.3.0):
+    dependencies:
+      debug: 4.4.3(supports-color@5.5.0)
+      express: 5.3.0
+      ip-address: 10.7.6
+    transitivePeerDependencies:
+      - supports-color
 
   express@5.3.0:
     dependencies:
