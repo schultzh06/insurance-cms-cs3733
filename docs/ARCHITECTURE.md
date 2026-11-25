@@ -25,6 +25,7 @@
   - [Global Search](#global-search)
   - [Background jobs](#background-jobs)
   - [Embeddings and semantic search](#embeddings-and-semantic-search)
+- [Deployment](#deployment)
 - [Conventions](#conventions)
 - [Testing](#testing)
 
@@ -40,8 +41,10 @@ apps/
       embeddingInputs.ts   buildEmbeddingInput() per entity kind (content, collection, employee, SR)
       extractors.ts        extractText() — plain text from files; OCR + OpenRouter vision fallback for images
     scripts/               One-shot maintenance scripts (not loaded at runtime)
-      backfill.ts          Backfills embeddings from Supabase-stored files
-      backfill-text.ts     Backfills embeddings from extracted file text
+      seed.ts              Resets and reseeds the demo: Auth0 users (idempotent sync), employees, R2 files + content rows
+      seed-data/           Seed manifests (employees, files, links), the demo files, and their sources (SOURCES.md)
+      backfill-text.ts     Extracts text from R2-stored files into content rows
+      backfill.ts          Generates embeddings for rows that lack one
       test-nl-query.ts     Interactive CLI test for the NL-query LLM pipeline
       test-nl-query-exec.ts Same but also executes the generated SQL
       eval-nl-query.ts     Measures OpenRouter spend + latency per question for one model
@@ -94,7 +97,7 @@ packages/db/
   prisma/schema.prisma     DB schema
   lib/
     prisma.ts              Prisma client (read-write)
-    supabase.ts            Supabase client
+    r2.ts                  S3 client for Cloudflare R2 + bucket names (R2_CONTENT_BUCKET, R2_PROFILES_BUCKET)
     embeddings.ts          embeddingToSql() — serialises a vector to pgvector literal format for raw SQL
     fewShotExamples.ts     Curated Q→SQL example pairs injected into the NL-query system prompt
     schemaDescription.ts   Human-readable DB schema description for the LLM system prompt
@@ -141,19 +144,18 @@ All routes are JSON unless noted. File-upload routes use `multipart/form-data` w
 - `GET    /api/content/transaction-summary` — aggregated counts (by type, status, persona) for the Reports dashboard card
 - `GET    /api/content/:id` — one item (with owner and `checkedOutBy`)
 - `GET    /api/content/:id/collections` — collections that contain this content item
-- `GET    /api/content/info/:id` — Supabase Storage metadata for the underlying file
-- `GET    /api/content/download/:id` — streams the file inline with the correct MIME type
-- `GET    /api/content/publicUrl/:id` — short-lived (120 s) signed URL
+- `GET    /api/content/info/:id` — size and MIME type of the underlying file (R2 `HeadObject`)
+- `GET    /api/content/file-url/:id` — `{ url, expiresAt }`: a 5-minute presigned R2 URL the browser fetches directly. Any logged-in user for non-deleted items; recycled items only for the owner or an admin (`404` otherwise, so their existence isn't revealed)
 - `POST   /api/content` — create (multipart; `linkURL` *xor* `fileURI`, never both)
 - `PUT    /api/content` — update; employee identity from JWT, else `409 { lockReleased: true }` if lock mismatch
-- `DELETE /api/content/:id` — soft-delete (recycle); same checkout lock check as `PUT`; clears the lock, does **not** delete the Supabase file
+- `DELETE /api/content/:id` — soft-delete (recycle); same checkout lock check as `PUT`; clears the lock, does **not** delete the R2 object
 - `GET    /api/content/deleted` — items in the recycle bin (all for admins, owned items only for non-admins)
 - `POST   /api/content/:id/restore` — moves item out of recycle bin; owner or admin only
-- `DELETE /api/content/:id/permanent` — hard-delete from DB and Supabase; item must already be in the recycle bin; owner or admin only
+- `DELETE /api/content/:id/permanent` — hard-delete from DB and R2; item must already be in the recycle bin; owner or admin only
 - `POST   /api/content/:id/checkout` — employee from JWT; 403 if persona doesn't match `targetPersona` (admins bypass); 409 if already locked by someone else
 - `POST   /api/content/:id/checkin` — admin can force-checkin any item; non-admins can only checkin their own lock
 
-> **Route order matters**: `info`, `download`, `publicUrl`, `tags`, `search`, `transaction-summary`, and `deleted` must be registered **before** `/:id`, otherwise Express 5 will match them to the parameterized route first. `checkout`, `checkin`, `restore`, and `permanent` are sub-routes under `/:id` and are unaffected.
+> **Route order matters**: `info`, `file-url`, `tags`, `search`, `transaction-summary`, and `deleted` must be registered **before** `/:id`, otherwise Express 5 will match them to the parameterized route first. `checkout`, `checkin`, `restore`, and `permanent` are sub-routes under `/:id` and are unaffected.
 
 #### Bookmarks (`/api/bookmark`)
 
@@ -221,7 +223,7 @@ visibility rules applied at the DB layer for `GET /api/collections`; post-query 
 
 - `POST /api/nl-query` — accepts `{ question, history[] }`. Calls the LLM (via OpenRouter) with a schema-aware system prompt; the response includes a SQL query and chart suggestion. The SQL is safety-validated (read-only allowlist) then executed against a Postgres read-only user. Returns `{ sql, explanation, suggestedChart, title, rows, columns, error? }`. Rate-limited per user (10/min, 100/week → `429`); OpenRouter out of budget or rate-limited → `503`. Every error response carries a user-facing `error` string.
 
-> **Route order matters in `apps/backend/src/app.ts`**: within the `/api/content` group, `info`, `download`, `publicUrl`, `search`, `tags`, `transaction-summary`, `deleted` must come before `/:id`. Within `/api/collections`, `favorites` and `owned` must come before `/:id`. Within `/api/notifications`, `dismissed` must come before any parameterized sub-route.
+> **Route order matters in `apps/backend/src/app.ts`**: within the `/api/content` group, `info`, `file-url`, `search`, `tags`, `transaction-summary`, `deleted` must come before `/:id`. Within `/api/collections`, `favorites` and `owned` must come before `/:id`. Within `/api/notifications`, `dismissed` must come before any parameterized sub-route.
 
 ### Checkout / check-in (server side)
 
@@ -231,14 +233,18 @@ Expired locks (`LOCK_TIMEOUT_MS = 2 * 60 * 1000`) are cleared server-side on the
 
 ### File storage
 
-Files live in two Supabase buckets:
+Files live in two Cloudflare R2 buckets, reached through the AWS S3 SDK (`packages/db/lib/r2.ts`). Code refers to them by key, `content` or `profiles`, which map to the bucket names in `R2_CONTENT_BUCKET` and `R2_PROFILES_BUCKET`:
 
 - `content` — uploaded documents attached to content items
 - `profiles` — employee profile photos
 
-All keys are namespaced and randomized: `${ownerOrEmployeeId}/${crypto.randomUUID()}/${originalFilename}`. This prevents collisions and makes accidental overwrites impossible. Uploads are transactional in spirit — if the DB write fails after a successful upload, the handler deletes the orphaned object (`uploadFile`, `updateContent`, `uploadProfilePhoto` all follow this pattern).
+All object keys are namespaced and randomized: `${ownerOrEmployeeId}/${crypto.randomUUID()}/${originalFilename}`. Uploads also send `If-None-Match: *`, so R2 refuses to overwrite an existing key. Uploads are transactional in spirit — if the DB write fails after a successful upload, the handler deletes the orphaned object (`uploadFile`, `updateContent`, `uploadProfilePhoto` all follow this pattern).
 
-All storage operations go through `packages/db/queries/bucket.ts` (`Bucket.uploadFile`, `downloadFile`, `deleteFile`, `createSignedUrl`, `createPublicUrl`, `getFileMetadata`).
+**Reads bypass the backend.** The browser asks `GET /api/content/file-url/:id` for a 5-minute presigned GET URL (served `inline`, with the stored MIME type) and fetches the object from R2 itself; it must not send its Auth0 `Authorization` header there, since the signature is the credential. Profile photos work the same way: employee records come back with `profilePhotoURI` replaced by a 1-hour presigned URL. The buckets' CORS rules allow `GET`/`HEAD` from the production origin and `localhost:5173` only.
+
+**Writes go through the backend**, because it needs the bytes in memory anyway to extract text and build the embedding.
+
+All storage operations go through `packages/db/queries/bucket.ts` (`Bucket.uploadFile`, `updateFile`, `downloadFile`, `deleteFile`, `createSignedUrl`, `getFileMetadata`, `emptyBucket`).
 
 ### Data model (abridged)
 
@@ -284,7 +290,7 @@ Feature modules live under `apps/frontend/src/features/`: **collections**, **con
 - **`useTheme()`** (`context/ThemeProvider`) — `light | dark | system`.
 - **`usePageTitle(title)`** — sets the browser `<title>`.
 - **`useSortState<T>` / `applySortState`** — generic column sort state used by every sortable table.
-- **`useAvatarUrl(id, uri)`** — fetches `GET /api/employee/photo/:id` and caches the blob in `lib/avatar-cache.ts`. Used by `EmployeeAvatar` and any component that needs a per-row signed URL.
+- **`useAvatarUrl(id, uri)`** — fetches the employee's presigned R2 photo URL (`profilePhotoURI`) and caches the blob in `lib/avatar-cache.ts`. Used by `EmployeeAvatar` and any component that needs a per-row signed URL.
 - **`useContentFilters(content, bookmarks, userId, persona)`** — owns all content filtering: search term, active tab (`forYou | all | owned | bookmarks | recyclebin`), and sidebar checkbox filters (status, contentType, persona, tags, docType, expirationStatus). Returns `filteredContent`, `activeFilterCount`, and setters. The `recyclebin` tab always yields an empty `filteredContent` — `ViewContent` renders it from a separate `deletedContent` state. Add new filters here, not in `ViewContent`.
 - **`useNLQuery()`** (`hooks/use-nl-query.ts`) — wraps `POST /api/nl-query`. Returns `{ ask(request), isLoading }`. `ask` resolves to `NLQueryFullResult` (`sql`, `explanation`, `chartType`, `rows`, `columns`). Used exclusively by `InsightsPage`.
 - **`useIsMobile()`** — `true` below 768 px via `matchMedia`. Used by the sidebar shell.
@@ -414,7 +420,7 @@ Fetches `GET /api/content/tags` on mount for suggestions; degrades to create-onl
 
 #### File previews and caching
 
-`FilePreview` renders the appropriate viewer by filetype (PDF, DOCX, images, text, etc.). Bytes are cached in `file-cache.ts` — `textCache: Map<url, string>` for text, `blobCache: Map<url, Blob>` for binary. Session-scoped, never auto-evicted — call `invalidateFileCacheById(id)` after saving an edit.
+`FilePreview` takes a `contentId` and renders the appropriate viewer by filetype (PDF, DOCX, images, text, etc.). It gets the file through `previews/file-url.ts`: `getFileUrl(id)` asks the backend for a presigned R2 URL and caches it until 30 s before expiry, and `fetchFile(id)` fetches the bytes from R2 without an `Authorization` header. Office documents hand the presigned URL to the external viewer. Bytes are cached in `file-cache.ts`, keyed by content id — `textCache` for text, `blobCache` for binary (the download button reuses the cached blob). Session-scoped, never auto-evicted — call `invalidateFileCacheById(id)` after saving an edit; it also drops the cached URL.
 
 `ViewSingleFile` (at `/file/:id`) fetches only metadata and delegates to `<FilePreview mode="full" />`. Both inline and full-page share the same cache, so navigating between them doesn't re-download.
 
@@ -518,7 +524,7 @@ Expiration alerts are synthetic (not stored as `Notification` rows) — the back
 
 At `/insights`. The page maintains a `conversation: ChatTurn[]` and renders either `EmptyState` (with suggested prompts) or `ConversationView`. The user types a question in `ChatInput` at the bottom; the page calls `useNLQuery().ask()` which posts to `POST /api/nl-query`.
 
-**Conversation history** is sent with each request so the model has context for follow-up questions. Only valid (non-errored) user/assistant pairs are included; `pairUpValidTurns` drops any user turn whose assistant response errored, since a dangling user turn in the `messages` array breaks the OpenAI API's alternating-role requirement.
+**Conversation history** is sent with each request so the model has context for follow-up questions. Only valid (non-errored) user/assistant pairs are included; `pairUpValidTurns` drops any user turn whose assistant response errored, since a dangling user turn in the `messages` array breaks the chat API's alternating-role requirement.
 
 **`ResultRenderer`** — dispatches to `ResultTable`, `ResultChart`, or `ResultScorecard` based on `chartType` returned by the LLM. `ResultChart` uses Recharts; chart type is one of `bar`, `line`, `pie`, or `scalar`. `ResultScorecard` is used when the query returns a single aggregate value. `formatInsightValue.ts` handles number formatting (currencies, percentages, plain numbers).
 
@@ -572,18 +578,44 @@ The `packages/db/lib/embeddings.ts` module provides `embeddingToSql()`, which se
 
 ---
 
+## Deployment
+
+The live demo runs as three containers on a self-hosted Docker host, deployed by Komodo and reached through a Cloudflare Tunnel:
+
+```text
+browser ──https──▶ Cloudflare (TLS) ──tunnel──▶ frontend: nginx
+                                                  ├─ /          → built SPA (index.html fallback for React Router)
+                                                  ├─ /config.js → Auth0 settings, written from env at container start
+                                                  └─ /api/*     → backend:3000 ──▶ ml-server:3001 (internal only)
+browser ──presigned URL──▶ Cloudflare R2 (file previews and downloads)
+```
+
+| Image | Built from | Notes |
+| --- | --- | --- |
+| `softeng-frontend` | `apps/frontend/Dockerfile` | Vite build served by nginx; `/api` proxy target is `API_URL`; Auth0 settings come from env, so one image works anywhere |
+| `softeng-backend` | `apps/backend/Dockerfile` | Only the backend and `packages/db`, production dependencies, Prisma client generated in a build stage; runs as `node` under `tini` |
+| `softeng-ml-server` | `apps/python/Dockerfile` | Python 3.14 (matches `.python-version`); the embedding model is baked into the image |
+
+All three install from the committed lockfiles (`pnpm install --frozen-lockfile`, `uv sync --frozen`). `.dockerignore` keeps every `.env*` file, `node_modules`, build output and local tooling out of the build context.
+
+**Configuration.** The backend's secrets come from one file, `apps/backend/.env` (template: `apps/backend/.env.example`), the same file used for local dev and the scripts. The frontend gets only `API_URL` and its three public Auth0 values, set directly in the stack's compose file. The compose file itself lives in the separate homelab repo, not here.
+
+**`./deploy.sh`** builds and pushes all three images as `:latest`, streams `apps/backend/.env` over ssh to the host's `/etc/softeng-demo/.env` (root, mode 600; the backend's `env_file`), then calls Komodo's API to `DeployStack` and waits for the result. The Komodo API key is read from Bitwarden Secrets Manager.
+
+---
+
 ## Conventions
 
 - **shadcn/ui primitives** — reach for a component from `components/ui/` (`Button`, `Dialog`, `Card`, `Input`, `Select`, `Popover`, `Table`, `Badge`, `Avatar`, etc.) before writing raw `<div>` elements. Add new primitives with `pnpm --filter frontend exec shadcn add <component>`. The `components/ui/` files are auto-generated and must not be hand-edited.
 - **pnpm only** — never `npm` or `npx`. Use `pnpm prisma migrate dev`, not `pnpx prisma migrate dev`.
-- **Relative API paths everywhere** — never hardcode `localhost:3000`. The backend serves the frontend's built `dist/` in production, so `/api/...` works in both environments.
+- **Relative API paths everywhere** — never hardcode `localhost:3000`. In dev, Vite proxies `/api` to the backend; in production, the frontend's nginx does, so `/api/...` works in both environments.
 - **`type` aliases only, no `interface`** — project-wide TypeScript convention for the frontend. A few legacy files still use `interface`; migrate as they're touched. No OOP/class-based patterns in frontend TS.
 - **`cache: "no-store"` on poll requests** — avoids stale cache hits on the 5-second edit-dialog poll and the 10-second list poll in `ViewContent`.
 - **Compare lock owners as strings** — use `String(data.checkedOutById) !== String(user!.id)`. The field is a number in the DB but JSON serialization can produce inconsistencies across endpoints, so string-comparing avoids `42 !== "42"` false mismatches.
 - **Always `parseInt` IDs on the backend** — `FormData` values are always strings, so `id`, `ownerID`, `employeeID` need parsing before use.
 - **Auth headers** — always `Authorization: Bearer ${token}` using `getAccessTokenSilently()` from `@auth0/auth0-react`.
 - **Polling (not WebSockets)** — consistent pattern: `ViewContent` lists poll every 10s, `EditContentDialog` polls every 5s.
-- **Express 5 wildcards** — use `app.get('/{*splat}', ...)`, not `app.get('*', ...)`. Required for the SPA fallback.
+- **Express 5 wildcards** — use `app.get('/{*splat}', ...)`, not `app.get('*', ...)`, for any catch-all route.
 
 ---
 
