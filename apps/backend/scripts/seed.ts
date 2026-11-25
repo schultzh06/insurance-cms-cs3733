@@ -76,6 +76,22 @@ function preflight(): string {
     return process.env.SEED_DEMO_PASSWORD!;
 }
 
+/**
+ * Fails before the wipe if the ML sidecar is down. Otherwise every embedding
+ * in stage 8 fails only after the whole seed has run.
+ */
+async function checkMlService() {
+    // Same default as lib/embeddings.ts.
+    const url = `${process.env.ML_SERVICE_URL ?? 'http://localhost:3001'}/health`;
+    try {
+        const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+        if (!res.ok) throw new Error(`status ${res.status}`);
+    } catch (err) {
+        console.error(`ML sidecar not reachable at ${url} (${(err as Error).message}). Start it with \`pnpm dev:python\`.`);
+        process.exit(1);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 2–4. Reset
 // ---------------------------------------------------------------------------
@@ -341,6 +357,7 @@ function runScript(script: string, args: string[] = []) {
 
 async function main() {
     const password = preflight();
+    await checkMlService();
     await resetDatabase();
     await resetStorage();
     const auth0Ids = await syncAuth0(password);
