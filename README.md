@@ -96,7 +96,7 @@ pnpm dev:all                                         # ML sidecar (:3001) + back
 
 `pnpm dev` runs just the backend and frontend; searches and saves need the sidecar running too (`pnpm dev:python`). Backend-only: `pnpm --filter backend dev`.
 
-Demo data: `pnpm seed` wipes and reseeds the database, R2 buckets and Auth0 users (`--reset-passwords` also resets existing demo users' passwords). It needs the sidecar running for embeddings.
+Demo data: `pnpm seed` wipes and reseeds the database, R2 buckets and Auth0 users (`--reset-passwords` also resets existing demo users' passwords). Fixtures in `apps/backend/scripts/seed-data/` cover employees, content, collections and service requests; bookmarks and previews are generated deterministically. It needs the sidecar running for embeddings and checks for it before wiping anything. Re-seeds are cheap: seed files keep fixed R2 keys and are re-uploaded only when changed, and extracted text and embeddings come from a local, gitignored cache in `seed-data/.cache/` (delete it to force a full re-extract).
 
 ### Environment variables
 

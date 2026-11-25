@@ -1,6 +1,9 @@
 /**
  * Wipes the demo environment and rebuilds it from the fixtures in `seed-data/`.
- * Destructive: truncates every app table and empties the storage buckets.
+ * Destructive: truncates every app table and deletes every stored file the
+ * fixtures don't own. Seed files sit at fixed keys (`<id>/seed/<filename>`)
+ * and are re-uploaded only when their contents change; extracted text and
+ * embeddings come from a local cache (seed-cache.ts) when unchanged.
  * The Auth0 tenant is synced rather than wiped: fixture users that already
  * exist are kept, missing ones are created, and any other user is deleted
  * (the demo tenant has no real accounts). This keeps re-runs cheap on the
@@ -18,7 +21,7 @@ import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { readFile } from 'fs/promises';
 import { existsSync } from 'fs';
-import { randomUUID } from 'crypto';
+import { createHash } from 'crypto';
 import { spawnSync } from 'child_process';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -103,11 +106,39 @@ async function resetDatabase() {
     console.log(`[reset] truncated ${TABLES.length} tables`);
 }
 
+/**
+ * Fixed storage key for a seeded file, so the next seed can recognise it.
+ * The `seed` segment can't collide with app uploads, which use a UUID there.
+ */
+const seedKey = (id: number, filename: string) => `${id}/seed/${filename}`;
+
+/** Every key the fixtures will upload, per bucket. */
+function seedKeys(): Record<typeof BUCKETS[number], Set<string>> {
+    const employeeIds = new Map(employees.map(e => [e.key, e.id]));
+    return {
+        content: new Set(files.map(f => seedKey(employeeIds.get(f.owner)!, f.file))),
+        profiles: new Set(employees.filter(e => e.photo).map(e => seedKey(e.id, e.photo!))),
+    };
+}
+
+/** Deletes everything except the fixtures' own files, which stage 5–6 then verify. */
 async function resetStorage() {
+    const keep = seedKeys();
     for (const bucket of BUCKETS) {
-        const removed = await Bucket.emptyBucket(bucket);
-        console.log(`[reset] removed ${removed} files from "${bucket}"`);
+        const removed = await Bucket.emptyBucket(bucket, keep[bucket]);
+        console.log(`[reset] removed ${removed} non-seed files from "${bucket}"`);
     }
+}
+
+/**
+ * Uploads `data` to `key` unless R2 already holds identical bytes (MD5 vs ETag).
+ * Returns whether it uploaded. Overwrites, so an edited fixture replaces the old copy.
+ */
+async function syncFile(data: Buffer, key: string, bucket: typeof BUCKETS[number]): Promise<boolean> {
+    const md5 = createHash('md5').update(data).digest('hex');
+    if (await Bucket.getMd5(key, bucket) === md5) return false;
+    await Bucket.updateFile(data, key, bucket);
+    return true;
 }
 
 /** Fixture login email for an employee; also the key Auth0 users are matched on. */
@@ -137,10 +168,9 @@ async function seedEmployees(auth0Ids: Map<string, string>) {
         if (e.photo) {
             const photoPath = resolve(TEAM_PHOTOS_DIR, e.photo);
             if (existsSync(photoPath)) {
-                // Same `<employeeId>/<uuid>/<filename>` scheme as buildPhotoURI in hooks/employee.ts.
-                const uri = `${e.id}/${randomUUID()}/${e.photo}`;
-                const { path } = await Bucket.uploadFile(await readFile(photoPath), uri, 'profiles');
-                await prisma.employee.update({ where: { id: e.id }, data: { profilePhotoURI: path } });
+                const key = seedKey(e.id, e.photo);
+                await syncFile(await readFile(photoPath), key, 'profiles');
+                await prisma.employee.update({ where: { id: e.id }, data: { profilePhotoURI: key } });
             } else {
                 console.warn(`[employees] photo not found for ${e.username}: ${photoPath}`);
             }
@@ -185,15 +215,16 @@ async function seedContent() {
     const now = new Date();
     const DAY_MS = 24 * 60 * 60 * 1000;
 
+    let uploaded = 0;
     for (const f of files) {
         const ownerId = employeeIds.get(f.owner);
         if (ownerId === undefined) throw new Error(`files.ts: unknown owner "${f.owner}" for ${f.file}`);
-        // Same `<ownerId>/<uuid>/<filename>` key scheme as buildFileURI in hooks/content.ts.
-        const { path } = await Bucket.uploadFile(await readFile(resolve(FILES_DIR, f.file)), `${ownerId}/${randomUUID()}/${f.file}`);
+        const key = seedKey(ownerId, f.file);
+        if (await syncFile(await readFile(resolve(FILES_DIR, f.file)), key, 'content')) uploaded++;
         await prisma.content.create({
             data: {
                 displayName: f.displayName,
-                fileURI: path,
+                fileURI: key,
                 ownerId,
                 contentType: f.contentType,
                 status: f.status,
@@ -205,7 +236,7 @@ async function seedContent() {
             },
         });
     }
-    console.log(`[content] uploaded ${files.length} files`);
+    console.log(`[content] ${files.length} files (${uploaded} uploaded, ${files.length - uploaded} unchanged)`);
 
     for (const l of links) {
         await prisma.content.create({
@@ -364,8 +395,8 @@ async function main() {
     await seedEmployees(auth0Ids);
     await seedContent();
     await seedRelations();
-    runScript('backfill-text.ts');
-    runScript('backfill.ts');
+    runScript('backfill-text.ts', ['--cache']);
+    runScript('backfill.ts', ['--cache']);
     console.log('\nSeed complete.');
 }
 

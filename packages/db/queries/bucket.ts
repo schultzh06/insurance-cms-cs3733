@@ -83,17 +83,34 @@ export class Bucket {
     }
 
     /**
-     * Deletes every object in a bucket and returns how many were removed.
-     * Destructive — used only by the demo seed script. R2 has no folders, so a
-     * flat paginated listing finds everything; each page (max 1000 keys) is
-     * removed with one DeleteObjects call.
+     * Returns the object's MD5 as lowercase hex, or null if it doesn't exist.
+     * Reads the ETag, which R2 sets to the content MD5 for single-part uploads
+     * (all of ours: `PutObject` never goes multipart). Lets the seed skip
+     * re-uploading unchanged files without downloading them.
      */
-    public static async emptyBucket(bucket: BucketKey): Promise<number> {
+    public static async getMd5(path: string, bucket: BucketKey = "content"): Promise<string | null> {
+        try {
+            const head = await r2.send(new HeadObjectCommand({ Bucket: R2_BUCKETS[bucket], Key: path }));
+            // ETags arrive wrapped in double quotes
+            return head.ETag?.replaceAll('"', "").toLowerCase() ?? null;
+        } catch (error) {
+            if (error instanceof NotFound) return null;
+            throw error;
+        }
+    }
+
+    /**
+     * Deletes every object in a bucket except the keys in `keep`, and returns
+     * how many were removed. Destructive — used only by the demo seed script.
+     * R2 has no folders, so a flat paginated listing finds everything; each
+     * page (max 1000 keys) is removed with one DeleteObjects call.
+     */
+    public static async emptyBucket(bucket: BucketKey, keep: ReadonlySet<string> = new Set()): Promise<number> {
         let removed = 0;
         let token: string | undefined;
         do {
             const page = await r2.send(new ListObjectsV2Command({ Bucket: R2_BUCKETS[bucket], ContinuationToken: token }));
-            const keys = (page.Contents ?? []).map(o => ({ Key: o.Key! }));
+            const keys = (page.Contents ?? []).filter(o => !keep.has(o.Key!)).map(o => ({ Key: o.Key! }));
             if (keys.length) {
                 const res = await r2.send(new DeleteObjectsCommand({ Bucket: R2_BUCKETS[bucket], Delete: { Objects: keys, Quiet: true } }));
                 // Quiet mode only reports failures; surface them rather than silently leaving files behind

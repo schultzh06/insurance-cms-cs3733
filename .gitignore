@@ -14,3 +14,6 @@ generated/
 CLAUDE.md
 collections-plan.md
 relaunch-plan.md
+
+# Local seed cache (extracted text + embeddings), machine-only
+apps/backend/scripts/seed-data/.cache/

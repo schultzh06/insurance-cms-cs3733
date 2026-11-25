@@ -7,6 +7,8 @@
  *
  * --target  Run only one entity type (default: all four)
  * --force   Re-embed rows that already have an embedding
+ * --cache   Reuse vectors from the local seed cache (see seed-cache.ts),
+ *           keyed by a hash of the embedding input, and record new ones there
  */
 import { config } from 'dotenv';
 import { resolve, dirname } from 'path';
@@ -20,8 +22,25 @@ const { prisma, embeddingToSql } = await import('@softeng-app/db');
 const { generateEmbedding } = await import('../lib/embeddings.js');
 const { buildContentEmbeddingInput, buildEmployeeEmbeddingInput, buildCollectionEmbeddingInput, buildServiceReqEmbeddingInput } = await import('../lib/embeddingInputs.js');
 
+const { SeedCache, sha256 } = await import('./seed-cache.js');
+
 const force = process.argv.includes('--force');
 const targetArg = process.argv.find(a => a.startsWith('--target='))?.split('=')[1];
+const cache = process.argv.includes('--cache') ? new SeedCache<number[]>('embeddings') : null;
+
+/**
+ * generateEmbedding with the optional seed cache in front. Keyed on the whole
+ * input text, so any change to a row's embedded fields misses and re-embeds.
+ */
+async function embed(input: string): Promise<number[]> {
+    if (!cache) return generateEmbedding(input);
+    const key = sha256(input);
+    const hit = cache.get(key);
+    if (hit) return hit;
+    const embedding = await generateEmbedding(input);
+    cache.set(key, embedding);
+    return embedding;
+}
 
 // ---------------------------------------------------------------------------
 // Content
@@ -42,7 +61,7 @@ async function backfillContent() {
 
     for (const item of rows) {
         try {
-            const embedding = await generateEmbedding(buildContentEmbeddingInput(
+            const embedding = await embed(buildContentEmbeddingInput(
                 item.displayName, item.contentType, item.targetPersona, item.tags ?? [], item.status, item.fileURI ?? null, item.textContent,
             ));
             await prisma.$executeRaw`UPDATE "Content" SET "embedding" = ${embeddingToSql(embedding)}::vector WHERE id = ${item.id}`;
@@ -72,7 +91,7 @@ async function backfillEmployees() {
     let success = 0, failed = 0;
 for (const row of rows) {
         try {
-            const embedding = await generateEmbedding(buildEmployeeEmbeddingInput(row.firstName, row.lastName, row.persona));
+            const embedding = await embed(buildEmployeeEmbeddingInput(row.firstName, row.lastName, row.persona));
             await prisma.$executeRaw`UPDATE "Employee" SET embedding = ${embeddingToSql(embedding)}::vector WHERE id = ${row.id}`;
             console.log(`  [${row.id}] ${row.firstName} ${row.lastName}`);
             success++;
@@ -107,7 +126,7 @@ async function backfillCollections() {
     let success = 0, failed = 0;
     for (const row of rows) {
         try {
-            const embedding = await generateEmbedding(buildCollectionEmbeddingInput(row.displayName, row.itemNames ?? []));
+            const embedding = await embed(buildCollectionEmbeddingInput(row.displayName, row.itemNames ?? []));
             await prisma.$executeRaw`UPDATE "Collection" SET embedding = ${embeddingToSql(embedding)}::vector WHERE id = ${row.id}`;
             console.log(`  [${row.id}] "${row.displayName}"`);
             success++;
@@ -132,7 +151,7 @@ async function backfillServiceReqs() {
     let success = 0, failed = 0;
     for (const row of rows) {
         try {
-            const embedding = await generateEmbedding(buildServiceReqEmbeddingInput(row.name, row.type, row.notes));
+            const embedding = await embed(buildServiceReqEmbeddingInput(row.name, row.type, row.notes));
             await prisma.$executeRaw`UPDATE "ServiceRequest" SET embedding = ${embeddingToSql(embedding)}::vector WHERE id = ${row.id}`;
             console.log(`  [${row.id}] "${row.name ?? '(unnamed)'}"`);
             success++;
@@ -153,6 +172,7 @@ async function main() {
     if (!targetArg || targetArg === 'collection') await backfillCollections();
     if (!targetArg || targetArg === 'servicereq') await backfillServiceReqs();
 
+    cache?.save();
     console.log('\nDone.');
     await prisma.$disconnect();
 }
