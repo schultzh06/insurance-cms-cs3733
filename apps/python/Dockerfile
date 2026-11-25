@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 # Install system tools
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -11,12 +11,15 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 WORKDIR /app
 
+# Use the image's Python (matching .python-version); never let uv download a different one
+ENV UV_PYTHON_DOWNLOADS=never
+
 # Cache directory for sentence-transformers models
 ENV SENTENCE_TRANSFORMERS_HOME=/app/.cache
 RUN mkdir -p /app/.cache
 
 # Copy only dependency files first (better layer caching)
-COPY apps/python/pyproject.toml apps/python/uv.lock ./
+COPY apps/python/pyproject.toml apps/python/uv.lock apps/python/.python-version ./
 RUN uv sync --no-dev --frozen --no-cache
 
 # Copy source
