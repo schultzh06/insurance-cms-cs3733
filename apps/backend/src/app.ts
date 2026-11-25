@@ -14,6 +14,7 @@ import * as collection from './hooks/collection'
 import * as notifications from './hooks/notifications'
 import * as previews from './hooks/preview'
 import * as nlQuery from './hooks/nlQuery'
+import { nlQueryMinuteLimit, nlQueryWeeklyLimit } from './helpers/nlQueryRateLimit'
 import * as search from './hooks/search'
 import { auth } from 'express-oauth2-jwt-bearer'
 
@@ -100,7 +101,8 @@ app.get("/api/notifications/dismissed", notifications.getDismissedNotifications)
 app.get("/api/notifications", notifications.getNotifications)
 app.post("/api/notifications/dismiss", notifications.dismissNotification);
 // NL Query
-app.post("/api/nl-query", nlQuery.generateNLQuery);
+// Minute limit first, so requests it rejects don't count toward the weekly quota.
+app.post("/api/nl-query", nlQueryMinuteLimit, nlQueryWeeklyLimit, nlQuery.generateNLQuery);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
